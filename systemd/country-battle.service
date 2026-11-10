@@ -1,0 +1,24 @@
+[Unit]
+Description=Country Flag Battle Arena 24/7 Production Server
+After=network.target
+
+[Service]
+Type=simple
+User=abdul-jabbar
+WorkingDirectory=/home/abdul-jabbar/game/country-battle-arena
+Environment=PORT=3000
+Environment=HOST=127.0.0.1
+Environment=PATH=/home/abdul-jabbar/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/home/abdul-jabbar/.nvm/versions/node/v24.21.0/bin/node /home/abdul-jabbar/game/country-battle-arena/scripts/server.mjs
+Restart=always
+RestartSec=5
+StandardOutput=append:/home/abdul-jabbar/game/country-battle-arena/logs/server.log
+StandardError=append:/home/abdul-jabbar/game/country-battle-arena/logs/server-error.log
+
+# Resource management
+LimitNOFILE=65536
+KillMode=process
+TimeoutStopSec=10
+
+[Install]
+WantedBy=default.target
