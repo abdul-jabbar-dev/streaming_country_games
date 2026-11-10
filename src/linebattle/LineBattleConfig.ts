@@ -62,10 +62,10 @@ export const LINE_BATTLE_CONFIG: LineBattleConfig = {
   canvasHeight: 720,
   arenaCenterX: 640,
   arenaCenterY: 360,
-  arenaRadius: 325,
+  arenaRadius: 346,
   arenaSegments: 32,
 
-  ballRadius: 22,
+  ballRadius: 19,
   countryCount: 12,
   minDesiredSpeed: 3.4,
   maxSpeed: 8.8,

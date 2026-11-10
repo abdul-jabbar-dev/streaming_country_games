@@ -105,11 +105,11 @@ const baseConfig: GameConfig = {
   canvasHeight: 720,
   arenaCenterX: 640,
   arenaCenterY: 360,
-  arenaRadius: 325,
+  arenaRadius: 346,
   arenaSegments: 32,
 
-  // Ball & Combat Physics (Reduced normally by 20% for prolonged, dynamic combat)
-  ballRadius: 23,
+  // Ball & Combat Physics (Sleek radius 19px for spacious arena mobility)
+  ballRadius: 19,
   countryCount: 12,
   initialHealth: 100,
   baseDamage: 4,

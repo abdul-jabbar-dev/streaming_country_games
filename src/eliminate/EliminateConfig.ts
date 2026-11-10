@@ -61,7 +61,7 @@ export const ELIMINATE_CONFIG: EliminateConfig = {
   canvasHeight: 720,
   arenaCenterX: 640,
   arenaCenterY: 360,
-  arenaRadius: 325,
+  arenaRadius: 346,
 
   // Noticeably smaller escape gap: reduced from 54° to 34° (~0.593 rad)
   gapAngleWidthRad: (34 * Math.PI) / 180,
@@ -69,11 +69,11 @@ export const ELIMINATE_CONFIG: EliminateConfig = {
   rotationSpeedRad: 0.016,
   boundaryThickness: 12,
 
-  ballRadius: 22,
+  ballRadius: 19,
   countryCount: 12,
   minSpeed: 4.8,
   maxSpeed: 11.2,
-  escapeThreshold: 325 + 22 + 15, // 362px from center
+  escapeThreshold: 346 + 19 + 15, // 380px from center
 
   // Health & Combat
   maxHealth: 100,

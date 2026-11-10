@@ -134,22 +134,28 @@ export class MovementController {
           if (nearestOpponent) {
             const oppDist = Math.sqrt(minOppDistSq);
             if (oppDist > 10) {
-              const huntMultiplier = aliveCount <= 2 ? 1.4 : aliveCount <= 3 ? 0.95 : 0.65;
-              const huntForce = this.config.steeringStrength * huntMultiplier * mass;
-              Body.applyForce(body, body.position, {
-                x: ((nearestOpponent.body.position.x - body.position.x) / oppDist) * huntForce,
-                y: ((nearestOpponent.body.position.y - body.position.y) / oppDist) * huntForce,
+              const huntDirX = (nearestOpponent.body.position.x - body.position.x) / oppDist;
+              const huntDirY = (nearestOpponent.body.position.y - body.position.y) / oppDist;
+              const steerBlend = aliveCount <= 2 ? 0.22 : aliveCount <= 3 ? 0.16 : 0.10;
+              const currentSpeed = Math.hypot(vx, vy) || ballMinSpeed;
+              Body.setVelocity(body, {
+                x: vx * (1 - steerBlend) + huntDirX * currentSpeed * steerBlend,
+                y: vy * (1 - steerBlend) + huntDirY * currentSpeed * steerBlend,
               });
             }
           }
 
           // Anti-orbiting rim kick: If running along outer perimeter, kick directly toward arena center
-          if (centerDist > 240) {
-            const kickStrength = this.config.steeringStrength * 0.8 * mass;
-            Body.applyForce(body, body.position, {
-              x: (dx / centerDist) * kickStrength,
-              y: (dy / centerDist) * kickStrength,
-            });
+          if (centerDist > 260) {
+            const inX = dx / centerDist;
+            const inY = dy / centerDist;
+            const vInward = vx * inX + vy * inY;
+            if (vInward < 1.0) {
+              Body.setVelocity(body, {
+                x: vx * 0.90 + inX * 1.8,
+                y: vy * 0.90 + inY * 1.8,
+              });
+            }
           }
         }
       }

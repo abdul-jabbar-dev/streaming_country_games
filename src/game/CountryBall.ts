@@ -188,9 +188,13 @@ export class CountryBall {
     const maxDist = arenaRadius - ballRadius;
 
     if (dist > maxDist && dist > 0) {
-      // Normal vector pointing inward
+      // Normal vector pointing outward from center
       const nx = dx / dist;
       const ny = dy / dist;
+
+      // Inward normal vector pointing straight to arena center
+      const inx = -nx;
+      const iny = -ny;
 
       // Reposition ball safely inside
       Body.setPosition(this.body, {
@@ -198,18 +202,44 @@ export class CountryBall {
         y: centerY + ny * maxDist,
       });
 
-      // Reflect radial component of velocity
+      // Outward velocity component
       const vx = this.body.velocity.x;
       const vy = this.body.velocity.y;
       const dot = vx * nx + vy * ny;
 
-      if (dot > 0) {
-        // Moving outward: reflect velocity vector inward
-        Body.setVelocity(this.body, {
-          x: (vx - 2 * dot * nx) * 0.95,
-          y: (vy - 2 * dot * ny) * 0.95,
-        });
+      let rvx = vx - 2 * dot * nx;
+      let rvy = vy - 2 * dot * ny;
+      let newSpeed = Math.sqrt(rvx * rvx + rvy * rvy);
+
+      // Tangent vector
+      const tx = -ny;
+      const ty = nx;
+
+      // Inward component of reflected velocity
+      const inwardSpeed = rvx * inx + rvy * iny;
+      const inwardRatio = newSpeed > 0.001 ? inwardSpeed / newSpeed : 1.0;
+
+      // Anti-skimming / anti-orbiting safeguard:
+      // If the incoming angle was grazing/tangential (inwardRatio < 0.5),
+      // enforce guaranteed inward bounce angle (36° to 48°) towards arena center!
+      if (inwardRatio < 0.5 && newSpeed > 0.001) {
+        const vt = rvx * tx + rvy * ty;
+        const tSign = vt >= 0 ? 1 : -1;
+        const bounceAngle = (38 + (Math.random() - 0.5) * 10) * (Math.PI / 180);
+        const sinA = Math.sin(bounceAngle);
+        const cosA = Math.cos(bounceAngle);
+        rvx = (inx * sinA + tx * (tSign * cosA)) * newSpeed;
+        rvy = (iny * sinA + ty * (tSign * cosA)) * newSpeed;
+      } else if (dot <= 0) {
+        // Ball was on/past boundary without outward velocity: kick firmly inward towards center!
+        rvx += inx * 2.4;
+        rvy += iny * 2.4;
       }
+
+      Body.setVelocity(this.body, {
+        x: rvx * 0.98,
+        y: rvy * 0.98,
+      });
     }
   }
 
