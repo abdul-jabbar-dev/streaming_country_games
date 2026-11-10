@@ -26,6 +26,7 @@ export class LineBattleEngine {
   private isPaused: boolean = false;
   private lastTime: number = 0;
   private accumulator: number = 0;
+  private isDestroyed: boolean = false;
 
   private visibilityHandler: () => void;
 
@@ -51,12 +52,6 @@ export class LineBattleEngine {
       adaptivePerf?.currentProfile
     );
 
-    if (adaptivePerf) {
-      adaptivePerf.onProfileChanged = (newProfile) => {
-        this.renderer.applyProfile(newProfile);
-      };
-    }
-
     this.visibilityHandler = () => {
       if (document.hidden) {
         this.accumulator = 0;
@@ -72,6 +67,10 @@ export class LineBattleEngine {
   }
 
   public start(): void {
+    if (this.isDestroyed) {
+      logger.warn('Cannot start a destroyed LineBattleEngine.');
+      return;
+    }
     if (this.isRunning) {
       logger.warn('LineBattleEngine is already running.');
       return;
@@ -87,14 +86,15 @@ export class LineBattleEngine {
   }
 
   public stop(): void {
-    if (!this.isRunning) return;
-
     this.isRunning = false;
     if (this.rafId !== null) {
       cancelAnimationFrame(this.rafId);
       this.rafId = null;
     }
     this.manager.destroy();
+    if (typeof document !== 'undefined') {
+      document.removeEventListener('visibilitychange', this.visibilityHandler);
+    }
     logger.info('LineBattleEngine stopped.');
   }
 
@@ -112,37 +112,44 @@ export class LineBattleEngine {
 
     let physicsDuration = 0;
 
-    if (!this.isPaused) {
-      this.accumulator += delta;
-      const maxAccumulator = this.config.fixedDeltaMs * this.config.maxSubSteps;
-      if (this.accumulator > maxAccumulator) {
-        this.accumulator = maxAccumulator;
+    try {
+      if (!this.isPaused) {
+        this.accumulator += delta;
+        const maxAccumulator = this.config.fixedDeltaMs * this.config.maxSubSteps;
+        if (this.accumulator > maxAccumulator) {
+          this.accumulator = maxAccumulator;
+        }
+
+        const pStart = performance.now();
+        while (this.accumulator >= this.config.fixedDeltaMs) {
+          Engine.update(this.physicsEngine, this.config.fixedDeltaMs);
+          this.manager.update(this.config.fixedDeltaMs, timestamp);
+          this.accumulator -= this.config.fixedDeltaMs;
+        }
+        physicsDuration = performance.now() - pStart;
       }
 
-      const pStart = performance.now();
-      while (this.accumulator >= this.config.fixedDeltaMs) {
-        Engine.update(this.physicsEngine, this.config.fixedDeltaMs);
-        this.manager.update(this.config.fixedDeltaMs, timestamp);
-        this.accumulator -= this.config.fixedDeltaMs;
-      }
-      physicsDuration = performance.now() - pStart;
+      const rStart = performance.now();
+      const diagnostics = this.adaptivePerf?.getDiagnostics();
+      this.renderer.render(this.config.debugMode ? diagnostics : undefined);
+      const renderDuration = performance.now() - rStart;
+
+      const totalFrameTime = performance.now() - frameStart;
+      this.adaptivePerf?.recordFrame(totalFrameTime, physicsDuration, renderDuration);
+    } catch (err) {
+      logger.error('Unhandled error in LineBattleEngine tick:', err);
+      this.destroy();
+      throw err;
     }
 
-    const rStart = performance.now();
-    const diagnostics = this.adaptivePerf?.getDiagnostics();
-    this.renderer.render(this.config.debugMode ? diagnostics : undefined);
-    const renderDuration = performance.now() - rStart;
-
-    const totalFrameTime = performance.now() - frameStart;
-    this.adaptivePerf?.recordFrame(totalFrameTime, physicsDuration, renderDuration);
-
-    this.rafId = requestAnimationFrame((ts) => this.tick(ts));
+    if (this.isRunning) {
+      this.rafId = requestAnimationFrame((ts) => this.tick(ts));
+    }
   }
 
   public destroy(): void {
+    if (this.isDestroyed) return;
+    this.isDestroyed = true;
     this.stop();
-    if (typeof document !== 'undefined') {
-      document.removeEventListener('visibilitychange', this.visibilityHandler);
-    }
   }
 }

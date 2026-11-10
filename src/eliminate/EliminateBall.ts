@@ -29,6 +29,7 @@ export class EliminateBall {
   // Temporary Ability States
   public shieldUntilMs: number = 0;
   public damageBoostUntilMs: number = 0;
+  public speedBoostUntilMs: number = 0;
   public damageMultiplier: number = 1.0;
 
   // Collision cooldown to prevent multi-frame damage grinding
@@ -71,6 +72,10 @@ export class EliminateBall {
     return now < this.damageBoostUntilMs;
   }
 
+  public isSpeedBoostActive(now: number): boolean {
+    return now < this.speedBoostUntilMs;
+  }
+
   public applyShield(durationMs: number, now: number): void {
     this.shieldUntilMs = Math.max(this.shieldUntilMs, now + durationMs);
   }
@@ -78,6 +83,10 @@ export class EliminateBall {
   public applyDamageBoost(multiplier: number, durationMs: number, now: number): void {
     this.damageMultiplier = multiplier;
     this.damageBoostUntilMs = Math.max(this.damageBoostUntilMs, now + durationMs);
+  }
+
+  public applySpeedBoost(durationMs: number, now: number): void {
+    this.speedBoostUntilMs = Math.max(this.speedBoostUntilMs, now + durationMs);
   }
 
   /**
@@ -127,7 +136,7 @@ export class EliminateBall {
     this.lastCollisionTimes.set(otherInstanceId, now);
   }
 
-  public update(minSpeed: number, maxSpeed: number): void {
+  public update(minSpeed: number, maxSpeed: number, now: number = 0): void {
     if (!this.isAlive) return;
 
     this.x += this.vx;
@@ -135,7 +144,8 @@ export class EliminateBall {
 
     const currentSpeed = Math.sqrt(this.vx * this.vx + this.vy * this.vy);
     const ballMinSpeed = minSpeed * this.speedMultiplier;
-    const ballMaxSpeed = maxSpeed * this.speedMultiplier;
+    const speedBoostCap = this.isSpeedBoostActive(now) ? 1.6 : 1.0;
+    const ballMaxSpeed = maxSpeed * this.speedMultiplier * speedBoostCap;
 
     if (currentSpeed < 0.001) {
       const angle = Math.random() * Math.PI * 2;

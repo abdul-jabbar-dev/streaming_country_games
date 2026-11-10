@@ -4,16 +4,21 @@
  */
 
 export type CollectibleType =
-  // Eliminate Arena Abilities
+  // Universal / Battle Arena Abilities
   | 'HEALTH_BOOST'
   | 'DAMAGE_BOOST'
   | 'SHIELD'
   | 'DUPLICATE'
+  | 'REPULSE'
+  | 'SPEED_BOOST'
+  | 'VORTEX'
+  | 'GRAB_THROW'
   // Line Battle Arena Abilities
   | 'ADD_STRINGS'
   | 'REMOVE_STRINGS'
   | 'SHIELD_STRINGS'
-  | 'REPAIR_STRING';
+  | 'REPAIR_STRING'
+  | 'SPEED_SLICER';
 
 export interface CollectibleDefinition {
   type: CollectibleType;

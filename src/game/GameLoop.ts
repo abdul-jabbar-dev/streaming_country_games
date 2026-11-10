@@ -30,6 +30,7 @@ export class GameLoop {
   private isPaused = false;
   private lastTime = 0;
   private accumulator = 0;
+  private isDestroyed = false;
 
   private visibilityHandler: () => void;
 
@@ -55,6 +56,10 @@ export class GameLoop {
   }
 
   public start(): void {
+    if (this.isDestroyed) {
+      logger.warn('Cannot start destroyed GameLoop.');
+      return;
+    }
     if (this.isRunning) {
       logger.warn('GameLoop is already running. Ignoring start request.');
       return;
@@ -69,8 +74,6 @@ export class GameLoop {
   }
 
   public stop(): void {
-    if (!this.isRunning) return;
-
     this.isRunning = false;
     if (this.rafId !== null) {
       cancelAnimationFrame(this.rafId);
@@ -120,43 +123,53 @@ export class GameLoop {
     let physicsSteps = 0;
     let physicsDuration = 0;
 
-    if (!this.isPaused) {
-      this.accumulator += delta;
+    try {
+      if (!this.isPaused) {
+        this.accumulator += delta;
 
-      // Cap accumulator to prevent spiral of death
-      const maxAccumulator = this.fixedDeltaMs * this.maxSubSteps;
-      if (this.accumulator > maxAccumulator) {
-        this.accumulator = maxAccumulator;
+        // Cap accumulator to prevent spiral of death
+        const maxAccumulator = this.fixedDeltaMs * this.maxSubSteps;
+        if (this.accumulator > maxAccumulator) {
+          this.accumulator = maxAccumulator;
+        }
+
+        const pStart = performance.now();
+        while (this.accumulator >= this.fixedDeltaMs) {
+          // Step physics engine
+          Engine.update(this.engine, this.fixedDeltaMs);
+          this.callbacks.updatePhysics(this.fixedDeltaMs);
+          this.accumulator -= this.fixedDeltaMs;
+          physicsSteps++;
+        }
+        physicsDuration = performance.now() - pStart;
+
+        // Update game logic (states, particles, timers)
+        this.callbacks.updateLogic(delta, timestamp);
       }
 
-      const pStart = performance.now();
-      while (this.accumulator >= this.fixedDeltaMs) {
-        // Step physics engine
-        Engine.update(this.engine, this.fixedDeltaMs);
-        this.callbacks.updatePhysics(this.fixedDeltaMs);
-        this.accumulator -= this.fixedDeltaMs;
-        physicsSteps++;
-      }
-      physicsDuration = performance.now() - pStart;
+      // Render step
+      const rStart = performance.now();
+      this.callbacks.render();
+      const renderDuration = performance.now() - rStart;
 
-      // Update game logic (states, particles, timers)
-      this.callbacks.updateLogic(delta, timestamp);
+      const totalFrameTime = performance.now() - frameStart;
+      this.perfMonitor?.recordFrame(totalFrameTime, physicsDuration, renderDuration, physicsSteps);
+      this.adaptivePerf?.recordFrame(totalFrameTime, physicsDuration, renderDuration);
+    } catch (err) {
+      logger.error('Unhandled error in GameLoop tick:', err);
+      this.destroy();
+      throw err;
     }
 
-    // Render step
-    const rStart = performance.now();
-    this.callbacks.render();
-    const renderDuration = performance.now() - rStart;
-
-    const totalFrameTime = performance.now() - frameStart;
-    this.perfMonitor?.recordFrame(totalFrameTime, physicsDuration, renderDuration, physicsSteps);
-    this.adaptivePerf?.recordFrame(totalFrameTime, physicsDuration, renderDuration);
-
-    this.rafId = requestAnimationFrame((ts) => this.tick(ts));
+    if (this.isRunning) {
+      this.rafId = requestAnimationFrame((ts) => this.tick(ts));
+    }
   }
 
   public destroy(): void {
     this.stop();
+    if (this.isDestroyed) return;
+    this.isDestroyed = true;
     if (typeof document !== 'undefined') {
       document.removeEventListener('visibilitychange', this.visibilityHandler);
     }

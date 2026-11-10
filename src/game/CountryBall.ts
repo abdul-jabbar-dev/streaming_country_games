@@ -28,6 +28,9 @@ export class CountryBall {
   public shieldUntilMs: number = 0;
   public damageBoostUntilMs: number = 0;
   public damageMultiplier: number = 1.0;
+  public speedBoostUntilMs: number = 0;
+  public grabUntilMs: number = 0;
+  public vortexUntilMs: number = 0;
   public isDuplicate: boolean = false;
 
   constructor(
@@ -64,6 +67,18 @@ export class CountryBall {
     return now < this.damageBoostUntilMs;
   }
 
+  public isSpeedBoostActive(now: number): boolean {
+    return now < this.speedBoostUntilMs;
+  }
+
+  public isGrabActive(now: number): boolean {
+    return now < this.grabUntilMs;
+  }
+
+  public isVortexActive(now: number): boolean {
+    return now < this.vortexUntilMs;
+  }
+
   public applyShield(durationMs: number, now: number): void {
     this.shieldUntilMs = Math.max(this.shieldUntilMs, now + durationMs);
   }
@@ -71,6 +86,22 @@ export class CountryBall {
   public applyDamageBoost(durationMs: number, multiplier: number = 2.0, now: number = 0): void {
     this.damageBoostUntilMs = Math.max(this.damageBoostUntilMs, now + durationMs);
     this.damageMultiplier = multiplier;
+  }
+
+  public applySpeedBoost(durationMs: number, now: number): void {
+    this.speedBoostUntilMs = Math.max(this.speedBoostUntilMs, now + durationMs);
+  }
+
+  public applyGrab(durationMs: number, now: number): void {
+    this.grabUntilMs = Math.max(this.grabUntilMs, now + durationMs);
+  }
+
+  public consumeGrab(): void {
+    this.grabUntilMs = 0;
+  }
+
+  public applyVortex(durationMs: number, now: number): void {
+    this.vortexUntilMs = Math.max(this.vortexUntilMs, now + durationMs);
   }
 
   public heal(amount: number): number {
@@ -106,12 +137,14 @@ export class CountryBall {
    * 1. Prevent balls from losing kinetic energy and grinding to a halt.
    * 2. Prevent balls from reaching extreme velocities that cause tunneling.
    */
-  public enforceVelocityLimits(minSpeed: number, maxSpeed: number): void {
+  public enforceVelocityLimits(minSpeed: number, maxSpeed: number, now: number = 0): void {
     if (!this.isAlive) return;
 
     const vx = this.body.velocity.x;
     const vy = this.body.velocity.y;
     const currentSpeed = Math.sqrt(vx * vx + vy * vy);
+
+    const effectiveMax = (now > 0 && this.isSpeedBoostActive(now)) ? maxSpeed * 1.6 : maxSpeed;
 
     if (currentSpeed < 0.001) {
       // Ball is virtually stationary: give gentle random kick
@@ -129,8 +162,8 @@ export class CountryBall {
         x: vx * scale,
         y: vy * scale,
       });
-    } else if (currentSpeed > maxSpeed) {
-      const scale = maxSpeed / currentSpeed;
+    } else if (currentSpeed > effectiveMax) {
+      const scale = effectiveMax / currentSpeed;
       Body.setVelocity(this.body, {
         x: vx * scale,
         y: vy * scale,

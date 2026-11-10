@@ -34,6 +34,7 @@ export class LineBattleBall {
   public speedMultiplier: number = 1.0;
   public massMultiplier: number = 1.0;
   public shieldUntilMs: number = 0;
+  public speedBoostUntilMs: number = 0;
 
   constructor(country: CountryData, body: MatterBody) {
     this.id = country.id;
@@ -52,10 +53,19 @@ export class LineBattleBall {
    * Effective speed multiplier accounting for country traits and attached tether drag.
    * Active lines create physical tether resistance: balls with fewer lines move faster and more agilely.
    */
-  public getEffectiveSpeedMultiplier(): number {
+  public getEffectiveSpeedMultiplier(now: number = 0): number {
     const activeLines = this.getActiveLineCount();
     const lineDrag = Math.max(0.72, 1.05 - activeLines * 0.015);
-    return this.speedMultiplier * lineDrag;
+    const speedBoost = this.isSpeedBoostActive(now) ? 1.55 : 1.0;
+    return this.speedMultiplier * lineDrag * speedBoost;
+  }
+
+  public isSpeedBoostActive(now: number): boolean {
+    return now < this.speedBoostUntilMs;
+  }
+
+  public applySpeedBoost(durationMs: number, now: number): void {
+    this.speedBoostUntilMs = Math.max(this.speedBoostUntilMs, now + durationMs);
   }
 
   /**

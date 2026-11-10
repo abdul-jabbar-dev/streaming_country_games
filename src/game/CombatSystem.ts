@@ -7,6 +7,7 @@ import Matter from 'matter-js';
 const { Body } = Matter;
 import type { CountryBall } from './CountryBall';
 import type { ParticleSystem } from './ParticleSystem';
+import { soundSynth } from '../audio/SoundSynthesizer.ts';
 
 export interface CombatConfig {
   baseDamage: number;
@@ -91,6 +92,35 @@ export class CombatSystem {
       x: ballB.body.velocity.x + nx * impulseB,
       y: ballB.body.velocity.y + ny * impulseB,
     });
+
+    // Tactile kinetic impact sound with stereo panning based on stadium contact location
+    const panX = Math.max(-0.9, Math.min(0.9, (contactPoint.x - 480) / 400));
+    soundSynth.playImpact(relSpeed, panX);
+
+    // Grab & Throw Ability execution on contact
+    if (ballA.isGrabActive(timestamp)) {
+      ballA.consumeGrab();
+      const throwSpeed = 9.5;
+      Body.setVelocity(ballB.body, {
+        x: nx * throwSpeed,
+        y: ny * throwSpeed,
+      });
+      ballB.takeDamage(16, timestamp);
+      soundSynth.playGrab(panX);
+      soundSynth.playAbilityImpact(panX);
+      this.particles?.spawnSparks(contactPoint.x, contactPoint.y, '#ef4444', 16);
+    } else if (ballB.isGrabActive(timestamp)) {
+      ballB.consumeGrab();
+      const throwSpeed = 9.5;
+      Body.setVelocity(ballA.body, {
+        x: -nx * throwSpeed,
+        y: -ny * throwSpeed,
+      });
+      ballA.takeDamage(16, timestamp);
+      soundSynth.playGrab(panX);
+      soundSynth.playAbilityImpact(panX);
+      this.particles?.spawnSparks(contactPoint.x, contactPoint.y, '#ef4444', 16);
+    }
 
     // Friendly duplicates do not damage each other
     if (ballA.id === ballB.id) {

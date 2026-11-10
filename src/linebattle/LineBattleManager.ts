@@ -19,6 +19,7 @@ import { checkBallCrossesSegmentCoords } from './LineIntersection.ts';
 import { CollectibleManager } from '../collectibles/CollectibleManager.ts';
 import type { CollectibleDefinition, CollectibleItem } from '../collectibles/CollectibleItem.ts';
 import type { BattleResults, BattleState, EliminationEvent, ParticipantScore } from '../game/GameState.ts';
+import { soundSynth } from '../audio/SoundSynthesizer.ts';
 import { logger } from '../utils/logger.ts';
 
 const LINE_ABILITY_DEFINITIONS: CollectibleDefinition[] = [
@@ -29,7 +30,7 @@ const LINE_ABILITY_DEFINITIONS: CollectibleDefinition[] = [
     icon: '🧶',
     color: '#eab308',
     accentColor: 'rgba(234, 179, 8, 0.45)',
-    weight: 30,
+    weight: 25,
   },
   {
     type: 'REMOVE_STRINGS',
@@ -38,7 +39,7 @@ const LINE_ABILITY_DEFINITIONS: CollectibleDefinition[] = [
     icon: '✂️',
     color: '#ef4444',
     accentColor: 'rgba(239, 68, 68, 0.45)',
-    weight: 25,
+    weight: 20,
   },
   {
     type: 'SHIELD_STRINGS',
@@ -47,7 +48,7 @@ const LINE_ABILITY_DEFINITIONS: CollectibleDefinition[] = [
     icon: '🛡️',
     color: '#06b6d4',
     accentColor: 'rgba(6, 182, 212, 0.45)',
-    weight: 25,
+    weight: 20,
   },
   {
     type: 'REPAIR_STRING',
@@ -55,8 +56,26 @@ const LINE_ABILITY_DEFINITIONS: CollectibleDefinition[] = [
     sublabel: 'FIX 1',
     icon: '🔧',
     color: '#10b981',
-    accentColor: 'rgba(16, 185, 129, 0.45)',
-    weight: 20,
+    accentColor: 'rgba(168, 85, 247, 0.45)',
+    weight: 15,
+  },
+  {
+    type: 'SPEED_SLICER',
+    label: 'SLICER',
+    sublabel: 'SPEED',
+    icon: '⚡',
+    color: '#3b82f6',
+    accentColor: 'rgba(59, 130, 246, 0.45)',
+    weight: 10,
+  },
+  {
+    type: 'REPULSE',
+    label: 'DEFENSE',
+    sublabel: 'BLAST',
+    icon: '💥',
+    color: '#ec4899',
+    accentColor: 'rgba(236, 72, 153, 0.45)',
+    weight: 10,
   },
 ];
 
@@ -75,6 +94,8 @@ export class LineBattleManager {
 
   public customParticipants: CountryData[] | null = null;
   public autoLoop: boolean = true;
+  private isDestroyed: boolean = false;
+  private hasPlayedShowdown: boolean = false;
 
   public stateTimerMs: number = 0;
   private roundStartTime: number = 0;
@@ -89,6 +110,7 @@ export class LineBattleManager {
   public onStateChange?: (state: BattleState, countdownVal?: number) => void;
   public onElimination?: (event: EliminationEvent) => void;
   public onRoundEnd?: (results: BattleResults) => void;
+  public onComplete?: () => void;
   public onLineCreated?: (line: ConnectionLine, ball: LineBattleBall) => void;
   public onLineCut?: (line: ConnectionLine, cutter: LineBattleBall, owner: LineBattleBall) => void;
 
@@ -189,14 +211,9 @@ export class LineBattleManager {
       // Set physical mass based on ball's individual trait
       Body.setMass(body, body.mass * ball.massMultiplier);
 
-      // Initial velocity pointing inward across the arena toward opponents
-      const speed = (this.config.minDesiredSpeed + Math.random() * 1.5) * ball.getEffectiveSpeedMultiplier();
-      const launchAngle = midAngle + Math.PI + (Math.random() - 0.5) * 0.6;
-
-      Body.setVelocity(body, {
-        x: Math.cos(launchAngle) * speed,
-        y: Math.sin(launchAngle) * speed,
-      });
+      // Keep bodies stationary during countdown
+      Body.setVelocity(body, { x: 0, y: 0 });
+      Body.setAngularVelocity(body, 0);
 
       // Pre-initial connection lines distributed evenly across this country's boundary sector
       // 2 countries => 50% sector (180 deg) each
@@ -237,6 +254,7 @@ export class LineBattleManager {
     this.collectibleManager.reset();
     this.winner = null;
     this.isDraw = false;
+    this.hasPlayedShowdown = false;
     this.eliminationLog = [];
   }
 
@@ -257,12 +275,31 @@ export class LineBattleManager {
       const isWallA = bodyA.label === 'ArenaWall';
       const isWallB = bodyB.label === 'ArenaWall';
 
-      if (!isWallA && !isWallB) continue;
+      if (!isWallA && !isWallB) {
+        // Inter-ball kinetic collision impact
+        const bA = this.balls.find((b) => b.isAlive && b.body.id === bodyA.id);
+        const bB = this.balls.find((b) => b.isAlive && b.body.id === bodyB.id);
+        if (bA && bB) {
+          const dvx = bA.body.velocity.x - bB.body.velocity.x;
+          const dvy = bA.body.velocity.y - bB.body.velocity.y;
+          const relSpeed = Math.sqrt(dvx * dvx + dvy * dvy);
+          const panX = ((bA.body.position.x + bB.body.position.x) * 0.5 - this.config.arenaCenterX) / this.config.arenaRadius;
+          soundSynth.playImpact(relSpeed, panX);
+        }
+        continue;
+      }
 
       const ballBody = isWallA ? bodyB : bodyA;
       const ball = this.balls.find((b) => b.isAlive && b.body.id === ballBody.id);
 
       if (!ball) continue;
+
+      // Play wall bounce ping
+      const vx = ball.body.velocity.x;
+      const vy = ball.body.velocity.y;
+      const bSpeed = Math.sqrt(vx * vx + vy * vy);
+      const panX = (ball.body.position.x - this.config.arenaCenterX) / this.config.arenaRadius;
+      soundSynth.playWallBounce(bSpeed, panX);
 
       // Check collision cooldown and max lines per country
       if (!ball.canCreateBoundaryLine(this.currentTimestamp, this.config.boundaryHitCooldownMs)) {
@@ -322,7 +359,25 @@ export class LineBattleManager {
     }
   }
 
+  private launchInitialImpulses(): void {
+    const count = this.balls.length;
+    const sectorSpan = (Math.PI * 2) / count;
+    for (let i = 0; i < count; i++) {
+      const ball = this.balls[i];
+      if (!ball.isAlive) continue;
+      const sectorStart = i * sectorSpan;
+      const midAngle = sectorStart + sectorSpan / 2;
+      const speed = (this.config.minDesiredSpeed + Math.random() * 1.5) * ball.getEffectiveSpeedMultiplier();
+      const launchAngle = midAngle + Math.PI + (Math.random() - 0.5) * 0.6;
+      Body.setVelocity(ball.body, {
+        x: Math.cos(launchAngle) * speed,
+        y: Math.sin(launchAngle) * speed,
+      });
+    }
+  }
+
   public update(deltaMs: number, timestamp: number): void {
+    if (this.isDestroyed) return;
     this.currentTimestamp = timestamp;
 
     try {
@@ -334,11 +389,13 @@ export class LineBattleManager {
 
         case 'COUNTDOWN': {
           this.stateTimerMs -= deltaMs;
-          const secondsRemaining = Math.max(1, Math.ceil(this.stateTimerMs / 1000));
+          const secondsRemaining = Math.max(0, Math.ceil(this.stateTimerMs / 1000));
           this.onStateChange?.('COUNTDOWN', secondsRemaining);
 
-          // Update line endpoints during countdown
+          // COMPLETE STADIUM FREEZE: Balls locked stationary at starting sectors
           for (const ball of this.balls) {
+            Body.setVelocity(ball.body, { x: 0, y: 0 });
+            Body.setAngularVelocity(ball.body, 0);
             for (const line of ball.lines) {
               line.updateEndpoint(ball.body.position.x, ball.body.position.y);
             }
@@ -348,8 +405,10 @@ export class LineBattleManager {
             this.state = 'BATTLE';
             this.roundStartTime = timestamp;
             this.collectibleManager.scheduleNextSpawn(timestamp);
-            this.onStateChange?.('BATTLE');
-            logger.info(`Line Battle Round ${this.roundNumber} BATTLE started!`);
+            this.onStateChange?.('BATTLE', 0);
+            soundSynth.playGoSignal();
+            this.launchInitialImpulses();
+            logger.info(`Line Battle Round ${this.roundNumber} BATTLE started with GO!`);
           }
           break;
         }
@@ -470,6 +529,7 @@ export class LineBattleManager {
             } else {
               this.state = 'INITIALIZING';
               this.onStateChange?.('INITIALIZING');
+              this.onComplete?.();
             }
           }
           break;
@@ -526,6 +586,10 @@ export class LineBattleManager {
             // Line cut confirmed!
             line.cut(cutter.id, timestamp, flashDuration);
             cutter.linesCut++;
+
+            // Razor-sharp laser line slice audio with stereo pan
+            const panX = (p1x - this.config.arenaCenterX) / this.config.arenaRadius;
+            soundSynth.playSlice(panX);
 
             // Dynamic slice momentum kick for the cutter
             const cutterVx = cutter.body.velocity.x;
@@ -589,6 +653,7 @@ export class LineBattleManager {
    */
   private applyAbility(ball: LineBattleBall, item: CollectibleItem, timestamp: number): void {
     if (!ball.isAlive) return;
+    soundSynth.playPickup();
 
     switch (item.type) {
       case 'ADD_STRINGS': {
@@ -615,6 +680,7 @@ export class LineBattleManager {
             ball.addLine(newLine);
           }
           this.particles.spawnSparks(ball.body.position.x, ball.body.position.y, '#eab308', 12);
+          soundSynth.playAbilityActivate();
           logger.info(`[Ability] ${ball.country.name} collected +${toAdd} strings!`);
         } else {
           logger.info(
@@ -627,6 +693,7 @@ export class LineBattleManager {
       case 'REMOVE_STRINGS': {
         const removed = ball.removeOldestActiveLines(this.config.removeStringsCount, timestamp);
         this.particles.spawnSparks(ball.body.position.x, ball.body.position.y, '#ef4444', 10);
+        soundSynth.playAbilityImpact();
         logger.info(`[Ability] ${ball.country.name} lost ${removed.length} strings from hazard collectible!`);
 
         // Check if removal triggered elimination (0 lines remaining)
@@ -639,6 +706,7 @@ export class LineBattleManager {
       case 'SHIELD_STRINGS': {
         ball.applyShield(this.config.stringShieldDurationMs, timestamp);
         this.particles.spawnSparks(ball.body.position.x, ball.body.position.y, '#06b6d4', 14);
+        soundSynth.playAbilityActivate();
         logger.info(
           `[Ability] ${ball.country.name} collected Shield String! (Lines protected for ${
             this.config.stringShieldDurationMs / 1000
@@ -665,8 +733,42 @@ export class LineBattleManager {
           );
           ball.addLine(repairedLine);
           this.particles.spawnSparks(ball.body.position.x, ball.body.position.y, '#10b981', 10);
+          soundSynth.playAbilityActivate();
           logger.info(`[Ability] ${ball.country.name} repaired 1 line!`);
         }
+        break;
+      }
+
+      case 'SPEED_SLICER': {
+        ball.applySpeedBoost(6000, timestamp);
+        const vx = ball.body.velocity.x * 1.6;
+        const vy = ball.body.velocity.y * 1.6;
+        Body.setVelocity(ball.body, { x: vx, y: vy });
+        this.particles.spawnSparks(ball.body.position.x, ball.body.position.y, '#3b82f6', 16);
+        soundSynth.playAbilityActivate();
+        logger.info(`[Ability] ${ball.country.name} activated SPEED_SLICER!`);
+        break;
+      }
+
+      case 'REPULSE': {
+        const blastRadius = 180;
+        this.particles.spawnSparks(ball.body.position.x, ball.body.position.y, '#ec4899', 22);
+        soundSynth.playAbilityImpact();
+        for (let i = 0; i < this.balls.length; i++) {
+          const target = this.balls[i];
+          if (!target.isAlive || target.id === ball.id) continue;
+          const rdx = target.body.position.x - ball.body.position.x;
+          const rdy = target.body.position.y - ball.body.position.y;
+          const dist = Math.hypot(rdx, rdy);
+          if (dist < blastRadius && dist > 1) {
+            const forceMag = (1 - dist / blastRadius) * 0.075 * (target.body.mass || 1);
+            Body.applyForce(target.body, target.body.position, {
+              x: (rdx / dist) * forceMag,
+              y: (rdy / dist) * forceMag,
+            });
+          }
+        }
+        logger.info(`[Ability] ${ball.country.name} blasted defensive shockwave!`);
         break;
       }
 
@@ -677,6 +779,11 @@ export class LineBattleManager {
 
   private checkWinnerCondition(timestamp: number): void {
     const aliveBalls = this.balls.filter((b) => b.isAlive);
+
+    if (aliveBalls.length === 2 && !this.hasPlayedShowdown) {
+      this.hasPlayedShowdown = true;
+      soundSynth.playShowdown();
+    }
 
     if (aliveBalls.length === 1) {
       const winner = aliveBalls[0];
@@ -754,7 +861,18 @@ export class LineBattleManager {
   }
 
   public destroy(): void {
+    if (this.isDestroyed) return;
+    this.isDestroyed = true;
     Events.off(this.engine, 'collisionStart', this.collisionHandlerBound);
     this.resetRound();
+    try {
+      Composite.clear(this.engine.world, false);
+    } catch {}
+    this.onStateChange = undefined;
+    this.onElimination = undefined;
+    this.onRoundEnd = undefined;
+    this.onComplete = undefined;
+    this.onLineCreated = undefined;
+    this.onLineCut = undefined;
   }
 }

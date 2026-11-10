@@ -17,6 +17,7 @@ import { ParticleSystem } from './ParticleSystem.ts';
 import { CollectibleManager } from '../collectibles/CollectibleManager.ts';
 import type { CollectibleDefinition, CollectibleItem } from '../collectibles/CollectibleItem.ts';
 import type { BattleResults, BattleState, EliminationEvent, ParticipantScore } from './GameState.ts';
+import { soundSynth } from '../audio/SoundSynthesizer.ts';
 import { logger } from '../utils/logger.ts';
 
 const BATTLE_ABILITY_DEFINITIONS: CollectibleDefinition[] = [
@@ -27,7 +28,7 @@ const BATTLE_ABILITY_DEFINITIONS: CollectibleDefinition[] = [
     icon: '❤️',
     color: '#10b981',
     accentColor: 'rgba(16, 185, 129, 0.45)',
-    weight: 30,
+    weight: 20,
   },
   {
     type: 'DAMAGE_BOOST',
@@ -36,7 +37,7 @@ const BATTLE_ABILITY_DEFINITIONS: CollectibleDefinition[] = [
     icon: '⚔️',
     color: '#f97316',
     accentColor: 'rgba(249, 115, 22, 0.45)',
-    weight: 25,
+    weight: 15,
   },
   {
     type: 'SHIELD',
@@ -45,7 +46,7 @@ const BATTLE_ABILITY_DEFINITIONS: CollectibleDefinition[] = [
     icon: '🛡️',
     color: '#06b6d4',
     accentColor: 'rgba(6, 182, 212, 0.45)',
-    weight: 25,
+    weight: 15,
   },
   {
     type: 'DUPLICATE',
@@ -54,7 +55,43 @@ const BATTLE_ABILITY_DEFINITIONS: CollectibleDefinition[] = [
     icon: '👥',
     color: '#a855f7',
     accentColor: 'rgba(168, 85, 247, 0.45)',
-    weight: 20,
+    weight: 10,
+  },
+  {
+    type: 'REPULSE',
+    label: 'BLAST',
+    sublabel: 'REPULSE',
+    icon: '💥',
+    color: '#ec4899',
+    accentColor: 'rgba(236, 72, 153, 0.45)',
+    weight: 15,
+  },
+  {
+    type: 'SPEED_BOOST',
+    label: 'NITRO',
+    sublabel: 'BOOST',
+    icon: '⚡',
+    color: '#eab308',
+    accentColor: 'rgba(234, 179, 8, 0.45)',
+    weight: 15,
+  },
+  {
+    type: 'GRAB_THROW',
+    label: 'GRAB',
+    sublabel: 'THROW',
+    icon: '🥊',
+    color: '#ef4444',
+    accentColor: 'rgba(239, 68, 68, 0.45)',
+    weight: 15,
+  },
+  {
+    type: 'VORTEX',
+    label: 'VORTEX',
+    sublabel: 'GRAVITY',
+    icon: '🌀',
+    color: '#6366f1',
+    accentColor: 'rgba(99, 102, 241, 0.45)',
+    weight: 10,
   },
 ];
 
@@ -72,6 +109,8 @@ export class BattleManager {
 
   public customParticipants: CountryData[] | null = null;
   public autoLoop: boolean = true;
+  private isDestroyed: boolean = false;
+  private hasPlayedShowdown: boolean = false;
 
   public stateTimerMs: number = 0;
   private roundStartTime: number = 0;
@@ -85,6 +124,7 @@ export class BattleManager {
   public onStateChange?: (state: BattleState, countdownVal?: number) => void;
   public onElimination?: (event: EliminationEvent) => void;
   public onRoundEnd?: (results: BattleResults) => void;
+  public onComplete?: () => void;
 
   constructor(
     config: GameConfig,
@@ -153,6 +193,7 @@ export class BattleManager {
       this.state = 'INITIALIZING';
       this.roundNumber++;
       this.winner = null;
+      this.hasPlayedShowdown = false;
       this.eliminationLog = [];
       this.particles.reset();
       this.collectibleManager.reset();
@@ -206,14 +247,9 @@ export class BattleManager {
       // Set physical mass based on ball's individual trait
       Body.setMass(body, body.mass * ball.massMultiplier);
 
-      // Initial inward velocity vector factoring in country agility
-      const speed = (this.config.minDesiredSpeed + Math.random() * 1.5) * ball.speedMultiplier;
-      const inwardAngle = angle + Math.PI + (Math.random() - 0.5) * 0.5;
-
-      Body.setVelocity(body, {
-        x: Math.cos(inwardAngle) * speed,
-        y: Math.sin(inwardAngle) * speed,
-      });
+      // Start stationary during COUNTDOWN
+      Body.setVelocity(body, { x: 0, y: 0 });
+      Body.setAngularVelocity(body, 0);
 
       this.balls.push(ball);
       Composite.add(this.engine.world, body);
@@ -221,9 +257,29 @@ export class BattleManager {
   }
 
   /**
+   * Smoothly launches all participants into combat upon reaching 0 / GO!
+   */
+  private launchInitialCombatImpulses(): void {
+    const count = this.balls.length;
+    for (let i = 0; i < count; i++) {
+      const ball = this.balls[i];
+      if (!ball.isAlive) continue;
+      const angle = (i / count) * Math.PI * 2;
+      const speed = (this.config.minDesiredSpeed + Math.random() * 1.5) * ball.speedMultiplier;
+      const inwardAngle = angle + Math.PI + (Math.random() - 0.5) * 0.5;
+
+      Body.setVelocity(ball.body, {
+        x: Math.cos(inwardAngle) * speed,
+        y: Math.sin(inwardAngle) * speed,
+      });
+    }
+  }
+
+  /**
    * Main game logic tick updated with fixedDeltaMs
    */
   public update(deltaMs: number, timestamp: number): void {
+    if (this.isDestroyed) return;
     try {
       this.currentTimestamp = timestamp;
       this.particles.update();
@@ -231,25 +287,23 @@ export class BattleManager {
       switch (this.state) {
         case 'COUNTDOWN': {
           this.stateTimerMs -= deltaMs;
-          const secondsRemaining = Math.max(1, Math.ceil(this.stateTimerMs / 1000));
+          const secondsRemaining = Math.max(0, Math.ceil(this.stateTimerMs / 1000));
           this.onStateChange?.(this.state, secondsRemaining);
 
-          // Gently keep balls in position or slow glide during countdown
+          // Complete physical stadium freeze: all participants remain stationary during countdown
           for (const ball of this.balls) {
-            ball.enforceRadialBoundary(
-              this.config.arenaCenterX,
-              this.config.arenaCenterY,
-              this.config.arenaRadius,
-              this.config.ballRadius
-            );
+            Body.setVelocity(ball.body, { x: 0, y: 0 });
+            Body.setAngularVelocity(ball.body, 0);
           }
 
           if (this.stateTimerMs <= 0) {
             this.state = 'BATTLE';
             this.roundStartTime = timestamp;
             this.collectibleManager.scheduleNextSpawn(timestamp);
-            this.onStateChange?.(this.state);
-            logger.info(`Round ${this.roundNumber} BATTLE started!`);
+            this.onStateChange?.(this.state, 0);
+            soundSynth.playGoSignal();
+            this.launchInitialCombatImpulses();
+            logger.info(`Round ${this.roundNumber} BATTLE started with GO!`);
           }
           break;
         }
@@ -261,6 +315,41 @@ export class BattleManager {
             { x: this.config.arenaCenterX, y: this.config.arenaCenterY },
             timestamp
           );
+
+          // Update active vortex attraction and visual particle trails
+          for (let i = 0; i < this.balls.length; i++) {
+            const ball = this.balls[i];
+            if (!ball.isAlive) continue;
+
+            // Vortex attraction physics
+            if (ball.isVortexActive(timestamp)) {
+              for (let j = 0; j < this.balls.length; j++) {
+                if (i === j) continue;
+                const opp = this.balls[j];
+                if (!opp.isAlive || opp.id === ball.id) continue;
+                const vdx = ball.body.position.x - opp.body.position.x;
+                const vdy = ball.body.position.y - opp.body.position.y;
+                const dist = Math.hypot(vdx, vdy);
+                if (dist < 190 && dist > 15) {
+                  const pullForce = (1 - dist / 190) * 0.00045 * (opp.body.mass || 1);
+                  Body.applyForce(opp.body, opp.body.position, {
+                    x: (vdx / dist) * pullForce,
+                    y: (vdy / dist) * pullForce,
+                  });
+                }
+              }
+            }
+
+            // Speed boost nitro trail
+            if (ball.isSpeedBoostActive(timestamp) && Math.random() < 0.35) {
+              this.particles.spawnSparks(
+                ball.body.position.x,
+                ball.body.position.y,
+                '#eab308',
+                2
+              );
+            }
+          }
 
           // Update visual flash timers and enforce radial boundary clamp
           for (const ball of this.balls) {
@@ -349,6 +438,7 @@ export class BattleManager {
             } else {
               this.state = 'INITIALIZING';
               this.onStateChange?.('INITIALIZING');
+              this.onComplete?.();
             }
           }
           break;
@@ -364,10 +454,13 @@ export class BattleManager {
   }
 
   private applyAbility(ball: CountryBall, item: CollectibleItem, timestamp: number): void {
+    soundSynth.playPickup();
+
     switch (item.type) {
       case 'HEALTH_BOOST': {
         const healed = ball.heal(this.config.healAmount || 35);
         this.particles.spawnSparks(ball.body.position.x, ball.body.position.y, '#10b981', 10);
+        soundSynth.playAbilityActivate();
         logger.info(`[Ability] ${ball.country.name} picked up HEALTH_BOOST (+${healed} HP)`);
         break;
       }
@@ -377,6 +470,7 @@ export class BattleManager {
         const multiplier = this.config.damageBoostMultiplier || 2.0;
         ball.applyDamageBoost(duration, multiplier, timestamp);
         this.particles.spawnSparks(ball.body.position.x, ball.body.position.y, '#f97316', 10);
+        soundSynth.playAbilityActivate();
         logger.info(`[Ability] ${ball.country.name} picked up DAMAGE_BOOST (2x for ${duration / 1000}s)`);
         break;
       }
@@ -385,7 +479,76 @@ export class BattleManager {
         const duration = this.config.shieldDurationMs || 6000;
         ball.applyShield(duration, timestamp);
         this.particles.spawnSparks(ball.body.position.x, ball.body.position.y, '#06b6d4', 10);
+        soundSynth.playAbilityActivate();
         logger.info(`[Ability] ${ball.country.name} picked up SHIELD (${duration / 1000}s)`);
+        break;
+      }
+
+      case 'REPULSE': {
+        // Radial kinetic shockwave: blasts opponents within 180px away
+        const blastRadius = 180;
+        this.particles.spawnSparks(ball.body.position.x, ball.body.position.y, '#ec4899', 24);
+        soundSynth.playAbilityImpact();
+
+        for (let i = 0; i < this.balls.length; i++) {
+          const target = this.balls[i];
+          if (!target.isAlive || target.id === ball.id) continue;
+          const rdx = target.body.position.x - ball.body.position.x;
+          const rdy = target.body.position.y - ball.body.position.y;
+          const dist = Math.hypot(rdx, rdy);
+          if (dist < blastRadius && dist > 1) {
+            const forceMag = (1 - dist / blastRadius) * 0.08 * (target.body.mass || 1);
+            Body.applyForce(target.body, target.body.position, {
+              x: (rdx / dist) * forceMag,
+              y: (rdy / dist) * forceMag,
+            });
+            target.takeDamage(10, timestamp);
+          }
+        }
+        logger.info(`[Ability] ${ball.country.name} activated REPULSE shockwave!`);
+        break;
+      }
+
+      case 'SPEED_BOOST': {
+        const duration = 6000;
+        ball.applySpeedBoost(duration, timestamp);
+        // Instant acceleration impulse
+        const currentSpeed = Math.hypot(ball.body.velocity.x, ball.body.velocity.y);
+        if (currentSpeed > 0.01) {
+          const factor = Math.min(1.8, (this.config.maxSpeed * 1.5) / currentSpeed);
+          Body.setVelocity(ball.body, {
+            x: ball.body.velocity.x * factor,
+            y: ball.body.velocity.y * factor,
+          });
+        }
+        this.particles.spawnSparks(ball.body.position.x, ball.body.position.y, '#eab308', 16);
+        soundSynth.playAbilityActivate();
+        logger.info(`[Ability] ${ball.country.name} gained SPEED_BOOST nitro!`);
+        break;
+      }
+
+      case 'GRAB_THROW': {
+        const duration = 8000;
+        ball.applyGrab(duration, timestamp);
+        this.particles.spawnSparks(ball.body.position.x, ball.body.position.y, '#ef4444', 16);
+        soundSynth.playGrab();
+        this.collectibleManager.addNotification(
+          ball.body.position.x,
+          ball.body.position.y,
+          'GRAB READY!',
+          '#ef4444',
+          timestamp
+        );
+        logger.info(`[Ability] ${ball.country.name} primed GRAB_THROW!`);
+        break;
+      }
+
+      case 'VORTEX': {
+        const duration = 6000;
+        ball.applyVortex(duration, timestamp);
+        this.particles.spawnSparks(ball.body.position.x, ball.body.position.y, '#6366f1', 20);
+        soundSynth.playAbilityActivate();
+        logger.info(`[Ability] ${ball.country.name} summoned GRAVITY VORTEX!`);
         break;
       }
 
@@ -468,6 +631,11 @@ export class BattleManager {
     const aliveBalls = this.balls.filter((b) => b.isAlive);
     const aliveCountries = new Set(aliveBalls.map((b) => b.id));
 
+    if (aliveCountries.size === 2 && !this.hasPlayedShowdown) {
+      this.hasPlayedShowdown = true;
+      soundSynth.playShowdown();
+    }
+
     if (aliveCountries.size === 1) {
       // Clear winner!
       const survivor = aliveBalls[0];
@@ -517,6 +685,16 @@ export class BattleManager {
       if (ballA && ballB) {
         const contactPoint = pair.collision.supports[0] || ballA.body.position;
         this.combatSystem.handleCollision(ballA, ballB, contactPoint, timestamp, this.roundStartTime);
+      } else {
+        const ball = ballA || ballB;
+        const other = ballA ? pair.bodyB : pair.bodyA;
+        if (ball && ball.isAlive && other && other.label === 'ArenaWall') {
+          const vx = ball.body.velocity.x;
+          const vy = ball.body.velocity.y;
+          const speed = Math.sqrt(vx * vx + vy * vy);
+          const panX = (ball.body.position.x - this.config.arenaCenterX) / this.config.arenaRadius;
+          soundSynth.playWallBounce(speed, panX);
+        }
       }
     }
   }
@@ -564,13 +742,22 @@ export class BattleManager {
   }
 
   public destroy(): void {
+    if (this.isDestroyed) return;
+    this.isDestroyed = true;
     Events.off(this.engine, 'collisionStart', this.collisionHandlerBound);
     this.arena.destroy(this.engine);
     for (const ball of this.balls) {
       ball.destroy(this.engine);
     }
     this.balls = [];
+    try {
+      Composite.clear(this.engine.world, false);
+    } catch {}
     this.particles.reset();
     this.collectibleManager.reset();
+    this.onStateChange = undefined;
+    this.onElimination = undefined;
+    this.onRoundEnd = undefined;
+    this.onComplete = undefined;
   }
 }

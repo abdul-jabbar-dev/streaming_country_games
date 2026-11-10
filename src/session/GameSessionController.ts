@@ -23,6 +23,14 @@ export type GameType = 'battle' | 'eliminate' | 'line';
 export type ExecutionMode = 'ONCE' | 'TIMED' | 'INFINITE';
 export type SessionState = 'IDLE' | 'RUNNING' | 'SESSION_FINISHED';
 
+export interface RoundHistoryEntry {
+  roundNumber: number;
+  gameType: GameType;
+  winner: CountryData | null;
+  durationSeconds: number;
+  timestamp: number;
+}
+
 export interface SessionMetrics {
   gameType: GameType;
   mode: ExecutionMode;
@@ -34,6 +42,7 @@ export interface SessionMetrics {
   formattedTime: string;
   isSessionExpired: boolean;
   winsByCountry: Map<string, { country: CountryData; wins: number }>;
+  recentResults: RoundHistoryEntry[];
   currentProfileName: string;
   qualityMode: QualityMode;
 }
@@ -52,10 +61,16 @@ export class GameSessionController {
   private eliminateEngine: EliminateEngine | null = null;
   private lineEngine: LineBattleEngine | null = null;
 
+  // Session Generation & Lifecycle Guard
+  private currentSessionId: number = 0;
+  private finalSessionElapsedMs: number = 0;
+  public lastRoundResults: BattleResults | null = null;
+
   // Session Timing
   private sessionStartTime: number = 0;
   private totalRoundsCompleted: number = 0;
   private winsByCountry = new Map<string, { country: CountryData; wins: number }>();
+  public recentResults: RoundHistoryEntry[] = [];
 
   // Selected Countries per game
   private selectedCountries: Map<GameType, CountryData[]> = new Map();
@@ -65,6 +80,7 @@ export class GameSessionController {
   public onStateChange?: (state: string, countdownVal?: number) => void;
   public onElimination?: (event: EliminationEvent) => void;
   public onRoundEnd?: (results: BattleResults) => void;
+  public onSessionFinish?: (metrics: SessionMetrics) => void;
   public onProfileChanged?: (profile: QualityProfile) => void;
 
   private readonly canvas: HTMLCanvasElement;
@@ -75,6 +91,8 @@ export class GameSessionController {
 
     this.adaptivePerf.onProfileChanged = (profile) => {
       this.renderer?.applyProfile(profile);
+      this.eliminateEngine?.renderer.applyProfile(profile);
+      this.lineEngine?.renderer.applyProfile(profile);
       this.onProfileChanged?.(profile);
     };
 
@@ -136,6 +154,9 @@ export class GameSessionController {
   public startSession(mode: ExecutionMode, customMinutes?: number): void {
     this.stopActiveEngine();
 
+    this.currentSessionId++;
+    const sessionId = this.currentSessionId;
+
     this.executionMode = mode;
     if (customMinutes && customMinutes > 0) {
       this.timedMinutes = customMinutes;
@@ -143,8 +164,10 @@ export class GameSessionController {
 
     this.sessionState = 'RUNNING';
     this.sessionStartTime = performance.now();
+    this.finalSessionElapsedMs = 0;
     this.totalRoundsCompleted = 0;
     this.winsByCountry.clear();
+    this.lastRoundResults = null;
 
     // Save preferences
     saveGamePreferences(this.activeGameType, {
@@ -155,18 +178,24 @@ export class GameSessionController {
 
     const participants = this.getSelectedCountries(this.activeGameType);
 
-    if (this.activeGameType === 'battle') {
-      this.initBattleEngine(participants);
-    } else if (this.activeGameType === 'eliminate') {
-      this.initEliminateEngine(participants);
-    } else {
-      this.initLineBattleEngine(participants);
+    try {
+      if (this.activeGameType === 'battle') {
+        this.initBattleEngine(participants, sessionId);
+      } else if (this.activeGameType === 'eliminate') {
+        this.initEliminateEngine(participants, sessionId);
+      } else {
+        this.initLineBattleEngine(participants, sessionId);
+      }
+    } catch (err) {
+      logger.error(`Failed to initialize ${this.activeGameType} session #${sessionId}:`, err);
+      this.stopSession();
+      throw err;
     }
 
-    logger.info(`Started ${this.activeGameType} session in mode: ${mode}`);
+    logger.info(`Started ${this.activeGameType} session #${sessionId} in mode: ${mode}`);
   }
 
-  private initBattleEngine(participants: CountryData[]): void {
+  private initBattleEngine(participants: CountryData[], sessionId: number): void {
     this.battleEngine = new GameEngine(
       CONFIG,
       () => {
@@ -190,57 +219,81 @@ export class GameSessionController {
     bm.autoLoop = this.executionMode !== 'ONCE';
 
     bm.onStateChange = (state, countdownVal) => {
+      if (this.currentSessionId !== sessionId) return;
       this.onStateChange?.(state, countdownVal);
     };
 
     bm.onElimination = (event) => {
+      if (this.currentSessionId !== sessionId) return;
       this.onElimination?.(event);
     };
 
     bm.onRoundEnd = (results) => {
+      if (this.currentSessionId !== sessionId) return;
       this.handleRoundFinished(results);
+    };
+
+    bm.onComplete = () => {
+      if (this.currentSessionId !== sessionId) return;
+      this.handleRoundSequenceComplete();
     };
 
     this.battleEngine.start();
   }
 
-  private initEliminateEngine(participants: CountryData[]): void {
+  private initEliminateEngine(participants: CountryData[], sessionId: number): void {
     this.eliminateEngine = new EliminateEngine(this.canvas, undefined, this.adaptivePerf);
     const em = this.eliminateEngine.manager;
     em.setParticipants(participants);
     em.autoLoop = this.executionMode !== 'ONCE';
 
     em.onStateChange = (state, countdownVal) => {
+      if (this.currentSessionId !== sessionId) return;
       this.onStateChange?.(state, countdownVal);
     };
 
     em.onElimination = (event) => {
+      if (this.currentSessionId !== sessionId) return;
       this.onElimination?.(event);
     };
 
     em.onRoundEnd = (results) => {
+      if (this.currentSessionId !== sessionId) return;
       this.handleRoundFinished(results);
+    };
+
+    em.onComplete = () => {
+      if (this.currentSessionId !== sessionId) return;
+      this.handleRoundSequenceComplete();
     };
 
     this.eliminateEngine.start();
   }
 
-  private initLineBattleEngine(participants: CountryData[]): void {
+  private initLineBattleEngine(participants: CountryData[], sessionId: number): void {
     this.lineEngine = new LineBattleEngine(this.canvas, undefined, this.adaptivePerf);
     const lm = this.lineEngine.manager;
     lm.setParticipants(participants);
     lm.autoLoop = this.executionMode !== 'ONCE';
 
     lm.onStateChange = (state, countdownVal) => {
+      if (this.currentSessionId !== sessionId) return;
       this.onStateChange?.(state, countdownVal);
     };
 
     lm.onElimination = (event) => {
+      if (this.currentSessionId !== sessionId) return;
       this.onElimination?.(event);
     };
 
     lm.onRoundEnd = (results) => {
+      if (this.currentSessionId !== sessionId) return;
       this.handleRoundFinished(results);
+    };
+
+    lm.onComplete = () => {
+      if (this.currentSessionId !== sessionId) return;
+      this.handleRoundSequenceComplete();
     };
 
     this.lineEngine.start();
@@ -248,6 +301,7 @@ export class GameSessionController {
 
   private handleRoundFinished(results: BattleResults): void {
     this.totalRoundsCompleted++;
+    this.lastRoundResults = results;
 
     if (results.winner) {
       const existing = this.winsByCountry.get(results.winner.id) || { country: results.winner, wins: 0 };
@@ -255,10 +309,22 @@ export class GameSessionController {
       this.winsByCountry.set(results.winner.id, existing);
     }
 
+    this.recentResults.unshift({
+      roundNumber: results.roundNumber,
+      gameType: this.activeGameType,
+      winner: results.winner,
+      durationSeconds: results.durationSeconds,
+      timestamp: Date.now(),
+    });
+    if (this.recentResults.length > 10) {
+      this.recentResults.pop();
+    }
+
     this.onRoundEnd?.(results);
 
     // Check execution mode termination rules
     if (this.executionMode === 'ONCE') {
+      this.finalSessionElapsedMs = Math.max(0, performance.now() - this.sessionStartTime);
       this.finishSession();
       if (this.battleEngine) this.battleEngine.battleManager.autoLoop = false;
       if (this.eliminateEngine) this.eliminateEngine.manager.autoLoop = false;
@@ -271,8 +337,9 @@ export class GameSessionController {
       const targetDurationMs = this.timedMinutes * 60 * 1000;
 
       if (elapsedMs >= targetDurationMs) {
-        // Timed session expired: gracefully finish
-        logger.info(`Timed session (${this.timedMinutes}m) reached. Gracefully stopping.`);
+        // Timed session expired: gracefully finish after presenting results
+        logger.info(`Timed session (${this.timedMinutes}m) reached. Gracefully stopping after results presentation.`);
+        this.finalSessionElapsedMs = elapsedMs;
         this.finishSession();
         if (this.battleEngine) this.battleEngine.battleManager.autoLoop = false;
         if (this.eliminateEngine) this.eliminateEngine.manager.autoLoop = false;
@@ -281,31 +348,62 @@ export class GameSessionController {
     }
   }
 
+  /**
+   * Called when an engine completes its full post-round presentation (winner + results + reset)
+   * while autoLoop is false (e.g. in ONCE mode or after TIMED expiry).
+   */
+  private handleRoundSequenceComplete(): void {
+    if (this.sessionState === 'SESSION_FINISHED') {
+      logger.info('Session round sequence completed. Gracefully shutting down active engine and releasing resources.');
+      this.stopActiveEngine();
+      this.onSessionFinish?.(this.getMetrics());
+      this.onMetricsUpdate?.(this.getMetrics());
+    }
+  }
+
   public finishSession(): void {
     this.sessionState = 'SESSION_FINISHED';
+    if (this.finalSessionElapsedMs === 0 && this.sessionStartTime > 0) {
+      this.finalSessionElapsedMs = Math.max(0, performance.now() - this.sessionStartTime);
+    }
     logger.info('Game session finished.');
   }
 
   public stopSession(): void {
+    this.currentSessionId++;
     this.stopActiveEngine();
     this.sessionState = 'IDLE';
+    this.finalSessionElapsedMs = 0;
+    this.onMetricsUpdate?.(this.getMetrics());
     logger.info('Game session stopped.');
   }
 
   private stopActiveEngine(): void {
     if (this.battleEngine) {
-      this.battleEngine.stop();
+      try {
+        this.battleEngine.destroy();
+      } catch (err) {
+        logger.error('Error destroying battleEngine:', err);
+      }
       this.battleEngine = null;
     }
     this.renderer = null;
 
     if (this.eliminateEngine) {
-      this.eliminateEngine.stop();
+      try {
+        this.eliminateEngine.destroy();
+      } catch (err) {
+        logger.error('Error destroying eliminateEngine:', err);
+      }
       this.eliminateEngine = null;
     }
 
     if (this.lineEngine) {
-      this.lineEngine.stop();
+      try {
+        this.lineEngine.destroy();
+      } catch (err) {
+        logger.error('Error destroying lineEngine:', err);
+      }
       this.lineEngine = null;
     }
   }
@@ -333,9 +431,11 @@ export class GameSessionController {
 
   public getMetrics(): SessionMetrics {
     const now = performance.now();
-    const elapsedMs = this.sessionState === 'RUNNING' || this.sessionState === 'SESSION_FINISHED'
-      ? Math.max(0, now - this.sessionStartTime)
-      : 0;
+    const elapsedMs = this.sessionState === 'SESSION_FINISHED' && this.finalSessionElapsedMs > 0
+      ? this.finalSessionElapsedMs
+      : (this.sessionState === 'RUNNING' || this.sessionState === 'SESSION_FINISHED'
+          ? Math.max(0, now - this.sessionStartTime)
+          : 0);
 
     let remainingMs: number | null = null;
     let formattedTime = '00:00';
@@ -364,6 +464,7 @@ export class GameSessionController {
       formattedTime,
       isSessionExpired: isExpired,
       winsByCountry: new Map(this.winsByCountry),
+      recentResults: [...this.recentResults],
       currentProfileName: this.adaptivePerf.currentProfile.name,
       qualityMode: this.adaptivePerf.qualityMode,
     };
@@ -382,6 +483,7 @@ export class GameSessionController {
   }
 
   public destroy(): void {
+    this.currentSessionId++;
     this.stopActiveEngine();
   }
 }

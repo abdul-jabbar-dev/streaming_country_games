@@ -164,6 +164,15 @@ export class EliminateRenderer {
         ctx.stroke();
       }
 
+      // Speed Boost Nitro Aura (electric golden ring)
+      if (ball.isSpeedBoostActive(now)) {
+        ctx.beginPath();
+        ctx.arc(px, py, effectiveRadius + 7 * scaleFactor, 0, Math.PI * 2);
+        ctx.strokeStyle = '#eab308';
+        ctx.lineWidth = 3.5 * scaleFactor;
+        ctx.stroke();
+      }
+
       // Ball Sprite
       ctx.drawImage(sprite.normal, px - offset, py - offset);
 
@@ -326,8 +335,9 @@ export class EliminateRenderer {
 
     if (state === 'COUNTDOWN') {
       const timerMs = this.manager.stateTimerMs;
-      const seconds = Math.max(1, Math.ceil(timerMs / 1000));
+      const seconds = Math.max(0, Math.ceil(timerMs / 1000));
       const secondProgress = Math.max(0, Math.min(1, (timerMs % 1000) / 1000 || 1));
+      const isGo = seconds === 0 || timerMs <= 250;
       const isFinal = seconds === 1;
 
       ctx.save();
@@ -335,15 +345,15 @@ export class EliminateRenderer {
       ctx.textBaseline = 'middle';
 
       // 1. Semi-transparent backdrop disc
-      const plateRadius = 78;
-      ctx.fillStyle = 'rgba(6, 10, 20, 0.78)';
+      const plateRadius = isGo ? 90 : 78;
+      ctx.fillStyle = isGo ? 'rgba(16, 185, 129, 0.25)' : 'rgba(6, 10, 20, 0.78)';
       ctx.beginPath();
       ctx.arc(arenaCenterX, arenaCenterY, plateRadius, 0, Math.PI * 2);
       ctx.fill();
 
       // 2. Animated circular progress ring
       const ringRadius = 68;
-      const ringColor = isFinal ? '#ff3366' : '#a855f7';
+      const ringColor = isGo ? '#10b981' : (isFinal ? '#ff3366' : '#a855f7');
       ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
       ctx.lineWidth = 6;
       ctx.beginPath();
@@ -364,19 +374,20 @@ export class EliminateRenderer {
       );
       ctx.stroke();
 
-      // 3. Central countdown numeral (3, 2, 1)
+      // 3. Central countdown numeral (3, 2, 1, GO!)
       const numScale = 1 + 0.16 * Math.sin(secondProgress * Math.PI);
-      ctx.font = `900 ${Math.round(76 * numScale)}px "Inter", sans-serif`;
-      ctx.fillStyle = isFinal ? '#ffd700' : '#ffffff';
-      ctx.shadowColor = isFinal ? '#ffd700' : '#a855f7';
+      const textToDisplay = isGo ? 'GO!' : seconds.toString();
+      ctx.font = `900 ${Math.round((isGo ? 64 : 76) * numScale)}px "Inter", sans-serif`;
+      ctx.fillStyle = isGo ? '#10b981' : (isFinal ? '#ffd700' : '#ffffff');
+      ctx.shadowColor = isGo ? '#10b981' : (isFinal ? '#ffd700' : '#a855f7');
       ctx.shadowBlur = 18;
-      ctx.fillText(seconds.toString(), arenaCenterX, arenaCenterY - 2);
+      ctx.fillText(textToDisplay, arenaCenterX, arenaCenterY - 2);
 
       // 4. Header & Subtitle
       ctx.shadowBlur = 0;
       ctx.font = '900 15px "Inter", sans-serif';
-      ctx.fillStyle = '#a855f7';
-      ctx.fillText('🌀 ROTATING GAP ARENA 🌀', arenaCenterX, arenaCenterY - 105);
+      ctx.fillStyle = isGo ? '#10b981' : '#a855f7';
+      ctx.fillText(isGo ? '⚡ FIGHT! ⚡' : '🌀 ROTATING GAP ARENA 🌀', arenaCenterX, arenaCenterY - 105);
 
       ctx.font = '700 13px "Inter", sans-serif';
       ctx.fillStyle = '#cbd5e1';

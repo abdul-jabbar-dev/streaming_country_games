@@ -13,6 +13,7 @@ import { ParticleSystem } from '../game/ParticleSystem.ts';
 import { CollectibleManager } from '../collectibles/CollectibleManager.ts';
 import type { CollectibleDefinition, CollectibleItem } from '../collectibles/CollectibleItem.ts';
 import type { BattleResults, BattleState, EliminationEvent, ParticipantScore } from '../game/GameState.ts';
+import { soundSynth } from '../audio/SoundSynthesizer.ts';
 import { logger } from '../utils/logger.ts';
 
 const ELIMINATE_ABILITY_DEFINITIONS: CollectibleDefinition[] = [
@@ -23,7 +24,7 @@ const ELIMINATE_ABILITY_DEFINITIONS: CollectibleDefinition[] = [
     icon: '❤️',
     color: '#10b981',
     accentColor: 'rgba(16, 185, 129, 0.45)',
-    weight: 30,
+    weight: 25,
   },
   {
     type: 'DAMAGE_BOOST',
@@ -32,7 +33,7 @@ const ELIMINATE_ABILITY_DEFINITIONS: CollectibleDefinition[] = [
     icon: '⚔️',
     color: '#f97316',
     accentColor: 'rgba(249, 115, 22, 0.45)',
-    weight: 25,
+    weight: 20,
   },
   {
     type: 'SHIELD',
@@ -41,7 +42,7 @@ const ELIMINATE_ABILITY_DEFINITIONS: CollectibleDefinition[] = [
     icon: '🛡️',
     color: '#06b6d4',
     accentColor: 'rgba(6, 182, 212, 0.45)',
-    weight: 25,
+    weight: 20,
   },
   {
     type: 'DUPLICATE',
@@ -50,7 +51,25 @@ const ELIMINATE_ABILITY_DEFINITIONS: CollectibleDefinition[] = [
     icon: '👥',
     color: '#a855f7',
     accentColor: 'rgba(168, 85, 247, 0.45)',
-    weight: 20,
+    weight: 15,
+  },
+  {
+    type: 'REPULSE',
+    label: 'BLAST',
+    sublabel: 'REPULSE',
+    icon: '💥',
+    color: '#ec4899',
+    accentColor: 'rgba(236, 72, 153, 0.45)',
+    weight: 15,
+  },
+  {
+    type: 'SPEED_BOOST',
+    label: 'NITRO',
+    sublabel: 'BOOST',
+    icon: '⚡',
+    color: '#eab308',
+    accentColor: 'rgba(234, 179, 8, 0.45)',
+    weight: 15,
   },
 ];
 
@@ -66,6 +85,8 @@ export class EliminateManager {
 
   public customParticipants: CountryData[] | null = null;
   public autoLoop: boolean = true;
+  private isDestroyed: boolean = false;
+  private hasPlayedShowdown: boolean = false;
 
   public stateTimerMs: number = 0;
   private roundStartTime: number = 0;
@@ -74,6 +95,7 @@ export class EliminateManager {
   public onStateChange?: (state: BattleState, countdownVal?: number) => void;
   public onElimination?: (event: EliminationEvent) => void;
   public onRoundEnd?: (results: BattleResults) => void;
+  public onComplete?: () => void;
 
   public readonly config: EliminateConfig;
 
@@ -117,6 +139,7 @@ export class EliminateManager {
       this.state = 'INITIALIZING';
       this.roundNumber++;
       this.winner = null;
+      this.hasPlayedShowdown = false;
       this.eliminationLog = [];
       this.balls = [];
       this.particles.reset();
@@ -161,34 +184,47 @@ export class EliminateManager {
         this.config.maxHealth,
         false
       );
-      const speed = (this.config.minSpeed + Math.random() * 1.5) * ball.speedMultiplier;
-      const moveAngle = angle + Math.PI / 2 + (Math.random() - 0.5) * 0.8; // Initial swirl
-
-      ball.vx = Math.cos(moveAngle) * speed;
-      ball.vy = Math.sin(moveAngle) * speed;
 
       this.balls.push(ball);
     }
   }
 
+  private launchInitialImpulses(): void {
+    const count = this.balls.length;
+    for (let i = 0; i < count; i++) {
+      const ball = this.balls[i];
+      const angle = (i / count) * Math.PI * 2;
+      const speed = (this.config.minSpeed + Math.random() * 1.5) * ball.speedMultiplier;
+      const moveAngle = angle + Math.PI / 2 + (Math.random() - 0.5) * 0.8;
+      ball.vx = Math.cos(moveAngle) * speed;
+      ball.vy = Math.sin(moveAngle) * speed;
+    }
+  }
+
   public update(deltaMs: number, timestamp: number): void {
+    if (this.isDestroyed) return;
     this.particles.update();
 
     switch (this.state) {
       case 'COUNTDOWN': {
         this.stateTimerMs -= deltaMs;
-        const secondsRemaining = Math.max(1, Math.ceil(this.stateTimerMs / 1000));
+        const secondsRemaining = Math.max(0, Math.ceil(this.stateTimerMs / 1000));
         this.onStateChange?.(this.state, secondsRemaining);
 
-        // Rotate boundary during countdown so players see the gap in motion
-        this.rotatingBoundary.update(this.config.rotationSpeedRad * 0.5);
+        // COMPLETE STADIUM FREEZE: No movement, zero velocities, rotating boundary paused
+        for (let i = 0; i < this.balls.length; i++) {
+          this.balls[i].vx = 0;
+          this.balls[i].vy = 0;
+        }
 
         if (this.stateTimerMs <= 0) {
           this.state = 'BATTLE';
           this.roundStartTime = timestamp;
           this.collectibleManager.scheduleNextSpawn(timestamp);
-          this.onStateChange?.(this.state);
-          logger.info(`Eliminate Round ${this.roundNumber} started!`);
+          this.onStateChange?.(this.state, 0);
+          soundSynth.playGoSignal();
+          this.launchInitialImpulses();
+          logger.info(`Eliminate Round ${this.roundNumber} started with GO!`);
         }
         break;
       }
@@ -270,7 +306,9 @@ export class EliminateManager {
         );
 
         // 4. Boundary collisions & gap escape detection
-        const escaped = this.rotatingBoundary.resolveCollisions(this.balls);
+        const escaped = this.rotatingBoundary.resolveCollisions(this.balls, (speed, panX) => {
+          soundSynth.playWallBounce(speed, panX);
+        });
         for (let i = 0; i < escaped.length; i++) {
           this.handleBallEscaped(escaped[i]);
         }
@@ -329,6 +367,7 @@ export class EliminateManager {
           } else {
             this.state = 'INITIALIZING';
             this.onStateChange?.('INITIALIZING');
+            this.onComplete?.();
           }
         }
         break;
@@ -364,6 +403,10 @@ export class EliminateManager {
     b1.registerDamageCollision(b2.instanceId, timestamp);
     b2.registerDamageCollision(b1.instanceId, timestamp);
 
+    // Tactile kinetic impact sound with stereo panning based on stadium contact location
+    const panX = Math.max(-0.9, Math.min(0.9, (contactX - this.config.arenaCenterX) / this.config.arenaRadius));
+    soundSynth.playImpact(relSpeed, panX);
+
     // Dynamic match acceleration after 25s to decisively conclude stalemates
     const battleDurationSec = Math.max(0, (timestamp - this.roundStartTime) / 1000);
     const timeScale = battleDurationSec > 25 ? 1.0 + (battleDurationSec - 25) * 0.05 : 1.0;
@@ -397,10 +440,13 @@ export class EliminateManager {
    * Applies picked up collectible effect
    */
   private applyAbility(ball: EliminateBall, item: CollectibleItem, timestamp: number): void {
+    soundSynth.playPickup();
+
     switch (item.type) {
       case 'HEALTH_BOOST': {
         const restored = ball.heal(this.config.healthBoostAmount);
         this.particles.spawnSparks(ball.x, ball.y, '#10b981', 8);
+        soundSynth.playAbilityActivate();
         logger.info(`[Ability] ${ball.country.name} collected Health Boost (+${restored} HP)`);
         break;
       }
@@ -412,6 +458,7 @@ export class EliminateManager {
           timestamp
         );
         this.particles.spawnSparks(ball.x, ball.y, '#f97316', 10);
+        soundSynth.playAbilityActivate();
         logger.info(`[Ability] ${ball.country.name} collected Damage Boost (${this.config.damageBoostMultiplier}x)`);
         break;
       }
@@ -419,7 +466,41 @@ export class EliminateManager {
       case 'SHIELD': {
         ball.applyShield(this.config.shieldDurationMs, timestamp);
         this.particles.spawnSparks(ball.x, ball.y, '#06b6d4', 10);
+        soundSynth.playAbilityActivate();
         logger.info(`[Ability] ${ball.country.name} collected Shield`);
+        break;
+      }
+
+      case 'REPULSE': {
+        // Outward radial blast: pushes nearby opponents towards boundary and gap!
+        const blastRadius = 180;
+        this.particles.spawnSparks(ball.x, ball.y, '#ec4899', 24);
+        soundSynth.playAbilityImpact();
+
+        for (let i = 0; i < this.balls.length; i++) {
+          const target = this.balls[i];
+          if (!target.isAlive || target.country.id === ball.country.id) continue;
+          const rdx = target.x - ball.x;
+          const rdy = target.y - ball.y;
+          const dist = Math.hypot(rdx, rdy);
+          if (dist < blastRadius && dist > 1) {
+            const push = (1 - dist / blastRadius) * 4.5;
+            target.vx += (rdx / dist) * push;
+            target.vy += (rdy / dist) * push;
+            target.takeDamage(10, timestamp);
+          }
+        }
+        logger.info(`[Ability] ${ball.country.name} activated REPULSE blast!`);
+        break;
+      }
+
+      case 'SPEED_BOOST': {
+        ball.applySpeedBoost(6000, timestamp);
+        ball.vx *= 1.7;
+        ball.vy *= 1.7;
+        this.particles.spawnSparks(ball.x, ball.y, '#eab308', 16);
+        soundSynth.playAbilityActivate();
+        logger.info(`[Ability] ${ball.country.name} activated SPEED_BOOST nitro!`);
         break;
       }
 
@@ -534,6 +615,11 @@ export class EliminateManager {
   private checkWinnerCondition(timestamp: number): void {
     const aliveCountries = this.getUniqueAliveCountries();
 
+    if (aliveCountries.length === 2 && !this.hasPlayedShowdown) {
+      this.hasPlayedShowdown = true;
+      soundSynth.playShowdown();
+    }
+
     if (aliveCountries.length === 1) {
       const winningCountry = aliveCountries[0];
       const survivor =
@@ -609,8 +695,14 @@ export class EliminateManager {
   }
 
   public destroy(): void {
+    if (this.isDestroyed) return;
+    this.isDestroyed = true;
     this.balls = [];
     this.particles.reset();
     this.collectibleManager.reset();
+    this.onStateChange = undefined;
+    this.onElimination = undefined;
+    this.onRoundEnd = undefined;
+    this.onComplete = undefined;
   }
 }

@@ -40,6 +40,8 @@ export class MovementController {
       this.lastSteerTime = timestamp;
     }
 
+    const aliveBalls = balls.filter((b) => b.isAlive);
+    const aliveCount = aliveBalls.length;
     const count = balls.length;
 
     for (let i = 0; i < count; i++) {
@@ -84,11 +86,12 @@ export class MovementController {
 
       // 3. Periodic controlled steering force (runs every steeringIntervalMs, NOT every frame)
       if (isSteeringTick) {
+        const mass = body.mass || 1;
+
         // If speed is drifting below minimum desired speed, apply forward physical force
         if (speed < ballMinSpeed) {
           const dirX = vx / speed;
           const dirY = vy / speed;
-          const mass = body.mass || 1;
           const forceMagnitude = this.config.steeringStrength * mass;
 
           Body.applyForce(body, body.position, {
@@ -103,21 +106,22 @@ export class MovementController {
         const centerDist = Math.sqrt(dx * dx + dy * dy);
 
         if (centerDist > 40) {
-          const mass = body.mass || 1;
-          const gentleCenterForce = (this.config.steeringStrength * 0.25) * mass;
+          const gentleCenterForce = (this.config.steeringStrength * 0.35) * mass;
           Body.applyForce(body, body.position, {
             x: (dx / centerDist) * gentleCenterForce,
             y: (dy / centerDist) * gentleCenterForce,
           });
         }
 
-        // Combat pursuit steering: when few balls remain, contestants hunt each other
-        if (count <= 4) {
+        // 4. Anti-Wall Orbiting Safeguard & Decisive Combat Pursuit
+        // When few countries survive (<= 5), actively hunt nearest opponent and prevent looping around perimeter
+        if (aliveCount <= 5) {
           let nearestOpponent: CountryBall | null = null;
           let minOppDistSq = Infinity;
-          for (let j = 0; j < count; j++) {
-            const opp = balls[j];
-            if (opp.id === ball.id || !opp.isAlive) continue;
+
+          for (let j = 0; j < aliveCount; j++) {
+            const opp = aliveBalls[j];
+            if (opp.id === ball.id) continue;
             const odx = opp.body.position.x - body.position.x;
             const ody = opp.body.position.y - body.position.y;
             const dSq = odx * odx + ody * ody;
@@ -126,16 +130,26 @@ export class MovementController {
               nearestOpponent = opp;
             }
           }
+
           if (nearestOpponent) {
             const oppDist = Math.sqrt(minOppDistSq);
-            if (oppDist > 20) {
-              const mass = body.mass || 1;
-              const huntForce = (this.config.steeringStrength * (count <= 2 ? 0.75 : 0.45)) * mass;
+            if (oppDist > 10) {
+              const huntMultiplier = aliveCount <= 2 ? 1.4 : aliveCount <= 3 ? 0.95 : 0.65;
+              const huntForce = this.config.steeringStrength * huntMultiplier * mass;
               Body.applyForce(body, body.position, {
                 x: ((nearestOpponent.body.position.x - body.position.x) / oppDist) * huntForce,
                 y: ((nearestOpponent.body.position.y - body.position.y) / oppDist) * huntForce,
               });
             }
+          }
+
+          // Anti-orbiting rim kick: If running along outer perimeter, kick directly toward arena center
+          if (centerDist > 240) {
+            const kickStrength = this.config.steeringStrength * 0.8 * mass;
+            Body.applyForce(body, body.position, {
+              x: (dx / centerDist) * kickStrength,
+              y: (dy / centerDist) * kickStrength,
+            });
           }
         }
       }

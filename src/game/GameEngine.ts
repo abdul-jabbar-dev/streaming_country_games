@@ -10,6 +10,7 @@ import type { GameConfig } from '../config/game.config.ts';
 import { BattleManager } from './BattleManager.ts';
 import { GameLoop } from './GameLoop.ts';
 import type { AdaptivePerformanceManager } from '../rendering/AdaptivePerformanceManager.ts';
+import { logger } from '../utils/logger.ts';
 
 export class GameEngine {
   public readonly config: GameConfig;
@@ -17,6 +18,7 @@ export class GameEngine {
   public battleManager: BattleManager;
   public gameLoop: GameLoop;
   public adaptivePerf?: AdaptivePerformanceManager;
+  private isDestroyed = false;
 
   constructor(
     config: GameConfig,
@@ -52,12 +54,22 @@ export class GameEngine {
   }
 
   public start(): void {
+    if (this.isDestroyed) {
+      logger.warn('Cannot start a destroyed GameEngine.');
+      return;
+    }
     this.battleManager.start();
     this.gameLoop.start();
   }
 
   public stop(): void {
-    this.gameLoop.stop();
+    this.gameLoop.destroy();
     this.battleManager.destroy();
+  }
+
+  public destroy(): void {
+    if (this.isDestroyed) return;
+    this.isDestroyed = true;
+    this.stop();
   }
 }

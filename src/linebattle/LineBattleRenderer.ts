@@ -426,6 +426,15 @@ export class LineBattleRenderer {
         ctx.stroke();
       }
 
+      // Speed Slicer Active Aura (electric blue high speed ring)
+      if (ball.isSpeedBoostActive(performance.now())) {
+        ctx.beginPath();
+        ctx.arc(px, py, effectiveRadius + 7 * scale, 0, Math.PI * 2);
+        ctx.strokeStyle = '#3b82f6';
+        ctx.lineWidth = 3 * scale;
+        ctx.stroke();
+      }
+
       // Active Line Count Badge (e.g. ⚡3)
       const lineCount = ball.getActiveLineCount();
       const badgeY = py - effectiveRadius - 12 * scale;
@@ -468,9 +477,10 @@ export class LineBattleRenderer {
 
     if (state === 'COUNTDOWN') {
       const timerMs = this.manager.stateTimerMs;
-      const seconds = Math.max(1, Math.ceil(timerMs / 1000));
+      const seconds = Math.max(0, Math.ceil(timerMs / 1000));
       // Fraction of current second remaining: 1 down to 0
       const secondProgress = Math.max(0, Math.min(1, (timerMs % 1000) / 1000 || 1));
+      const isGo = seconds === 0 || timerMs <= 250;
       const isFinal = seconds === 1;
 
       ctx.save();
@@ -478,15 +488,15 @@ export class LineBattleRenderer {
       ctx.textBaseline = 'middle';
 
       // 1. Semi-transparent central backdrop plate
-      const plateRadius = 78 * scale;
-      ctx.fillStyle = 'rgba(6, 12, 24, 0.78)';
+      const plateRadius = (isGo ? 90 : 78) * scale;
+      ctx.fillStyle = isGo ? 'rgba(16, 185, 129, 0.25)' : 'rgba(6, 12, 24, 0.78)';
       ctx.beginPath();
       ctx.arc(cx, cy, plateRadius, 0, Math.PI * 2);
       ctx.fill();
 
       // 2. Animated circular progress ring
       const ringRadius = 68 * scale;
-      const ringColor = isFinal ? '#ff3366' : '#00f2ff';
+      const ringColor = isGo ? '#10b981' : (isFinal ? '#ff3366' : '#00f2ff');
       ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
       ctx.lineWidth = 6 * scale;
       ctx.beginPath();
@@ -507,20 +517,21 @@ export class LineBattleRenderer {
       );
       ctx.stroke();
 
-      // 3. Central countdown numeral (3, 2, 1) with scale pop
+      // 3. Central countdown numeral (3, 2, 1, GO!) with scale pop
       const numScale = 1 + 0.16 * Math.sin(secondProgress * Math.PI);
-      const fontSize = Math.round(76 * scale * numScale);
+      const textToDisplay = isGo ? 'GO!' : seconds.toString();
+      const fontSize = Math.round((isGo ? 64 : 76) * scale * numScale);
       ctx.font = `900 ${fontSize}px "Inter", system-ui, sans-serif`;
-      ctx.fillStyle = isFinal ? '#ffd700' : '#ffffff';
-      ctx.shadowColor = isFinal ? '#ffd700' : '#00f2ff';
+      ctx.fillStyle = isGo ? '#10b981' : (isFinal ? '#ffd700' : '#ffffff');
+      ctx.shadowColor = isGo ? '#10b981' : (isFinal ? '#ffd700' : '#00f2ff');
       ctx.shadowBlur = 18 * scale;
-      ctx.fillText(seconds.toString(), cx, cy - 2 * scale);
+      ctx.fillText(textToDisplay, cx, cy - 2 * scale);
 
       // 4. Header & Subtitle
       ctx.shadowBlur = 0;
       ctx.font = `900 ${Math.round(15 * scale)}px system-ui, sans-serif`;
-      ctx.fillStyle = '#00f2ff';
-      ctx.fillText('⚡ BATTLE STARTING ⚡', cx, cy - 105 * scale);
+      ctx.fillStyle = isGo ? '#10b981' : '#00f2ff';
+      ctx.fillText(isGo ? '⚡ FIGHT! ⚡' : '⚡ BATTLE STARTING ⚡', cx, cy - 105 * scale);
 
       ctx.font = `700 ${Math.round(13 * scale)}px system-ui, sans-serif`;
       ctx.fillStyle = '#cbd5e1';

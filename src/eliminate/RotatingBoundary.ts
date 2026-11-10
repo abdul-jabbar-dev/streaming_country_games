@@ -40,7 +40,10 @@ export class RotatingBoundary {
    * Resolves collisions between balls and the rotating boundary
    * Returns balls that successfully passed through the gap past escapeThreshold
    */
-  public resolveCollisions(balls: EliminateBall[]): EliminateBall[] {
+  public resolveCollisions(
+    balls: EliminateBall[],
+    onWallBounce?: (speed: number, panX: number) => void
+  ): EliminateBall[] {
     const escapedBalls: EliminateBall[] = [];
     const halfGap = this.gapAngleWidthRad / 2;
 
@@ -127,6 +130,7 @@ export class RotatingBoundary {
 
             ball.vx = rvx * 0.98;
             ball.vy = rvy * 0.98;
+            onWallBounce?.(newSpeed, nx);
           } else {
             // Ball is near the boundary without outward velocity: kick firmly inward into arena
             ball.vx += inx * 1.6;

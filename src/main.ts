@@ -11,6 +11,8 @@ import type { QualityMode } from './rendering/QualityProfiles.ts';
 import { CountrySelector } from './ui/CountrySelector.ts';
 import { HUD } from './ui/HUD.ts';
 import { BroadcastMode } from './ui/BroadcastMode.ts';
+import { KeyboardShortcutManager } from './ui/KeyboardShortcutManager.ts';
+import { soundSynth } from './audio/SoundSynthesizer.ts';
 import { logger } from './utils/logger.ts';
 
 const app = document.querySelector<HTMLDivElement>('#app');
@@ -44,6 +46,13 @@ app.innerHTML = `
             <option value="HIGH">HIGH (1080p)</option>
           </select>
         </div>
+        <div class="audio-control-group" title="Procedural Audio & Volume">
+          <button id="btn-audio-mute" class="action-btn audio-btn" title="Toggle Sound / Mute (M)">🔊</button>
+          <input type="range" id="audio-volume-slider" class="volume-slider" min="0" max="1" step="0.05" value="${soundSynth.getMasterVolume()}" title="Audio Volume" />
+        </div>
+        <button id="btn-shortcuts-help" class="action-btn" title="Keyboard Shortcuts (?)">
+          ⌨️ SHORTCUTS
+        </button>
         <button id="export-diag-btn" class="action-btn" title="Export Diagnostics Report">
           📊 REPORT
         </button>
@@ -289,24 +298,29 @@ function showGame(gameType: GameType): void {
   dashboardView.classList.add('hidden');
   gameplayView.classList.remove('hidden');
 
+  const streamHeadline = document.querySelector<HTMLElement>('#stream-match-headline');
+
   if (gameType === 'battle') {
     appHeading.textContent = 'Country Battle Arena';
     appSubheading.textContent = 'Esports 2D Physics Battle Royale • Impact Velocity Damage';
     arenaPanelTitle.textContent = 'BATTLEGROUND ARENA';
     bannerGameName.textContent = 'Battle Arena';
     bannerGameName.className = 'banner-val highlight-cyan';
+    if (streamHeadline) streamHeadline.textContent = 'WORLD ARENA • COUNTRY BATTLE ARENA';
   } else if (gameType === 'eliminate') {
     appHeading.textContent = 'Country Eliminate Arena';
     appSubheading.textContent = 'Rotating Gap Hazard Survival • Avoid Escaping the Gap';
     arenaPanelTitle.textContent = 'ROTATING GAP ARENA';
     bannerGameName.textContent = 'Eliminate Arena';
     bannerGameName.className = 'banner-val highlight-purple';
+    if (streamHeadline) streamHeadline.textContent = 'WORLD ARENA • COUNTRY ELIMINATE ARENA';
   } else {
     appHeading.textContent = 'Country Line Battle Arena';
     appSubheading.textContent = 'Dynamic Line Tether Survival • Cut Opponent Lines To Eliminate';
     arenaPanelTitle.textContent = 'LINE TETHER ARENA';
     bannerGameName.textContent = 'Line Battle Arena';
     bannerGameName.className = 'banner-val highlight-gold';
+    if (streamHeadline) streamHeadline.textContent = 'WORLD ARENA • COUNTRY LINE BATTLE ARENA';
   }
 
   updateSelectedCountryBadge();
@@ -461,15 +475,32 @@ sessionController.onStateChange = (state, countdownVal) => {
   hud.updateMetrics();
   if (state === 'COUNTDOWN') {
     hud.resetRound();
+    if (countdownVal !== undefined) {
+      soundSynth.playCountdown(countdownVal);
+    }
+  } else if (state === 'WINNER_ANNOUNCEMENT') {
+    soundSynth.playVictory();
+    const activeMgr = sessionController.getActiveManager() as any;
+    const winnerName = activeMgr?.winner ? activeMgr.winner.country?.name : 'DRAW';
+    const winnerFlag = activeMgr?.winner ? activeMgr.winner.country?.flag : '🏆';
+    broadcastMode.pushTickerNews(`👑 ${winnerFlag} ${winnerName.toUpperCase()} WON THE MATCH!`);
   }
 };
 
 sessionController.onElimination = (event) => {
   hud.addElimination(event);
   hud.updateLeaderboard();
+  soundSynth.playElimination();
+
+  const news = event.customMessage
+    ? `${event.victim.flag} ${event.victim.name} ${event.customMessage}`
+    : `${event.victim.flag} ${event.victim.name} eliminated by ${event.killer ? event.killer.flag + ' ' + event.killer.name : 'the arena'}`;
+  broadcastMode.pushTickerNews(news);
 };
 
 sessionController.onRoundEnd = () => {
+  const metrics = sessionController.getMetrics();
+  hud.updateSessionStats(metrics.winsByCountry, metrics.recentResults);
   hud.updateMetrics();
   hud.updateLeaderboard();
 };
@@ -480,6 +511,7 @@ sessionController.onProfileChanged = (profile) => {
 
 function updateSessionUI(): void {
   const metrics = sessionController.getMetrics();
+  hud.updateSessionStats(metrics.winsByCountry, metrics.recentResults);
 
   bannerModeName.textContent = metrics.mode === 'TIMED' ? `TIMED (${sessionController.timedMinutes}M)` : metrics.mode;
   bannerRoundsVal.textContent = metrics.totalRoundsCompleted.toString();
@@ -526,7 +558,76 @@ setInterval(() => {
   }
 }, 1000);
 
-// Global Key Shortcuts & Broadcast Toggle
+// Audio Volume and Mute Controls
+const audioMuteBtn = document.querySelector<HTMLButtonElement>('#btn-audio-mute');
+const audioSlider = document.querySelector<HTMLInputElement>('#audio-volume-slider');
+
+function updateAudioUI(): void {
+  const isMuted = soundSynth.getIsMuted();
+  const volume = soundSynth.getMasterVolume();
+  if (audioMuteBtn) {
+    audioMuteBtn.textContent = isMuted ? '🔇' : (volume > 0.5 ? '🔊' : volume > 0 ? '🔉' : '🔇');
+    audioMuteBtn.classList.toggle('muted', isMuted);
+  }
+  if (audioSlider) {
+    audioSlider.value = isMuted ? '0' : volume.toString();
+  }
+}
+
+if (audioMuteBtn) {
+  audioMuteBtn.addEventListener('click', () => {
+    soundSynth.toggleMute();
+    updateAudioUI();
+  });
+}
+
+if (audioSlider) {
+  audioSlider.addEventListener('input', (e) => {
+    const val = parseFloat((e.target as HTMLInputElement).value);
+    soundSynth.setMasterVolume(val);
+    updateAudioUI();
+  });
+}
+updateAudioUI();
+
+// Keyboard Shortcut Manager & Interactive Controller
+const shortcutManager = new KeyboardShortcutManager({
+  switchGameMode: (mode) => {
+    showGame(mode);
+  },
+  startSession: (mode, minutes) => {
+    if (mode === 'ONCE') {
+      highlightModeBtn(modeOnceBtn);
+      sessionController.startSession('ONCE');
+    } else if (mode === 'TIMED') {
+      const m = minutes || 30;
+      highlightModeBtn(m === 60 ? mode60mBtn : mode30mBtn);
+      sessionController.startSession('TIMED', m);
+    } else {
+      highlightModeBtn(modeInfiniteBtn);
+      sessionController.startSession('INFINITE');
+    }
+    updateSessionUI();
+  },
+  stopSession: () => {
+    sessionController.stopSession();
+    hud.updateStatus('IDLE');
+    updateSessionUI();
+  },
+  toggleFullscreen: () => {
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen().catch(() => {});
+    } else {
+      document.exitFullscreen().catch(() => {});
+    }
+  },
+});
+
+document.querySelector('#btn-shortcuts-help')?.addEventListener('click', () => {
+  shortcutManager.toggleHelpModal(true);
+});
+
+// Broadcast Mode Button
 const broadcastBtn = document.querySelector<HTMLButtonElement>('#toggle-broadcast-btn');
 if (broadcastBtn) {
   broadcastBtn.addEventListener('click', () => {
@@ -563,11 +664,17 @@ if (requestedGame === 'line') {
 } else if (requestedGame === 'eliminate') {
   showGame('eliminate');
   sessionController.startSession('INFINITE');
-} else if (requestedGame === 'battle' || urlParams.has('broadcast')) {
+} else if (requestedGame === 'battle' || urlParams.has('broadcast') || urlParams.has('stream')) {
   showGame('battle');
   sessionController.startSession('INFINITE');
 } else {
   showDashboard();
+}
+
+if (urlParams.has('broadcast') || urlParams.has('stream')) {
+  if (!broadcastMode.isActive) {
+    broadcastMode.toggle();
+  }
 }
 
 logger.info('Triple Game Management System initialized with Adaptive Performance.');
