@@ -36,6 +36,13 @@ export class BroadcastMode {
     this.updateTickerDisplay();
   }
 
+  public updateSpeedBadge(speed: number): void {
+    const pill = document.querySelector<HTMLElement>('#stream-speed-pill');
+    if (pill) {
+      pill.textContent = `⚡ ${speed}x SPEED`;
+    }
+  }
+
   private updateTickerDisplay(): void {
     if (!this.tickerElem) return;
     const tickerTextElem = this.tickerElem.querySelector('.stream-ticker-content');
@@ -66,6 +73,7 @@ export class BroadcastMode {
           <span class="stream-live-dot"></span>
           <strong>LIVE STREAM • 60 FPS</strong>
         </div>
+         
         <div class="stream-match-headline" id="stream-match-headline">
           WORLD ARENA • AUTONOMOUS LEAGUE
         </div>

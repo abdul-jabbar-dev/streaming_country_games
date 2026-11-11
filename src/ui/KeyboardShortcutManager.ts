@@ -10,6 +10,7 @@ export interface KeyboardActions {
   stopSession: () => void;
   toggleFullscreen: () => void;
   toggleBroadcast?: () => void;
+  setGameSpeed?: (speed: number) => void;
 }
 
 export class KeyboardShortcutManager {
@@ -76,6 +77,13 @@ export class KeyboardShortcutManager {
               <div class="shortcut-row"><kbd>B</kbd> + <kbd>O</kbd> <span>Switch to Battle & Start Once</span></div>
               <div class="shortcut-row"><kbd>E</kbd> + <kbd>I</kbd> <span>Switch to Eliminate & Start Infinite</span></div>
               <div class="shortcut-row"><kbd>L</kbd> + <kbd>M</kbd> <span>Switch to Line Battle & Start 30m</span></div>
+            </div>
+            <div class="shortcut-section">
+              <h4>⚡ Simulation Speed</h4>
+              <div class="shortcut-row"><kbd>0</kbd> <span>Set 0.1x Speed (Slow-Mo)</span></div>
+              <div class="shortcut-row"><kbd>1</kbd> <span>Set 1x Speed (Normal)</span></div>
+              <div class="shortcut-row"><kbd>2</kbd> <span>Set 2x Speed (Very Fast)</span></div>
+              <div class="shortcut-row"><kbd>3</kbd> <span>Set 3x Speed (Maximum Speed)</span></div>
             </div>
             <div class="shortcut-section">
               <h4>📺 Utility</h4>
@@ -219,6 +227,26 @@ export class KeyboardShortcutManager {
       case 'S':
         this.actions.stopSession();
         this.showToast('Session Stopped', '🛑');
+        break;
+
+      case '0':
+        this.actions.setGameSpeed?.(0.1);
+        this.showToast('Speed: 0.1x (Slow-Mo)', '⚡');
+        break;
+
+      case '1':
+        this.actions.setGameSpeed?.(1.0);
+        this.showToast('Speed: 1x (Normal)', '⚡');
+        break;
+
+      case '2':
+        this.actions.setGameSpeed?.(2.0);
+        this.showToast('Speed: 2x (Very Fast)', '⚡');
+        break;
+
+      case '3':
+        this.actions.setGameSpeed?.(3.0);
+        this.showToast('Speed: 3x (Max)', '⚡');
         break;
 
       case 'F':

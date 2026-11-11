@@ -90,6 +90,7 @@ export class EliminateManager {
 
   public stateTimerMs: number = 0;
   private roundStartTime: number = 0;
+  public currentTimestamp: number = 0;
 
   // Listeners for UI
   public onStateChange?: (state: BattleState, countdownVal?: number) => void;
@@ -203,6 +204,7 @@ export class EliminateManager {
 
   public update(deltaMs: number, timestamp: number): void {
     if (this.isDestroyed) return;
+    this.currentTimestamp = timestamp;
     this.particles.update();
 
     switch (this.state) {

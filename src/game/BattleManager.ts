@@ -114,7 +114,7 @@ export class BattleManager {
 
   public stateTimerMs: number = 0;
   private roundStartTime: number = 0;
-  private currentTimestamp: number = 0;
+  public currentTimestamp: number = 0;
   private collisionHandlerBound: (event: IEventCollision<Engine>) => void;
 
   public readonly config: GameConfig;

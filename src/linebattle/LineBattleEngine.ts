@@ -13,6 +13,7 @@ import { LINE_BATTLE_CONFIG } from './LineBattleConfig.ts';
 import type { LineBattleConfig } from './LineBattleConfig.ts';
 import type { AdaptivePerformanceManager } from '../rendering/AdaptivePerformanceManager.ts';
 import { logger } from '../utils/logger.ts';
+import { validateSpeedMultiplier } from '../config/GameSpeed.ts';
 
 export class LineBattleEngine {
   public manager: LineBattleManager;
@@ -26,6 +27,8 @@ export class LineBattleEngine {
   private isPaused: boolean = false;
   private lastTime: number = 0;
   private accumulator: number = 0;
+  private virtualTime: number = 0;
+  private speedMultiplier: number = 1.0;
   private isDestroyed: boolean = false;
 
   private visibilityHandler: () => void;
@@ -33,10 +36,12 @@ export class LineBattleEngine {
   constructor(
     canvas: HTMLCanvasElement,
     customConfig?: Partial<LineBattleConfig>,
-    adaptivePerf?: AdaptivePerformanceManager
+    adaptivePerf?: AdaptivePerformanceManager,
+    initialSpeedMultiplier: number = 1.0
   ) {
     this.config = { ...LINE_BATTLE_CONFIG, ...customConfig };
     this.adaptivePerf = adaptivePerf;
+    this.speedMultiplier = validateSpeedMultiplier(initialSpeedMultiplier);
 
     // Matter.js engine with zero gravity and sleeping disabled
     this.physicsEngine = Engine.create({
@@ -66,6 +71,14 @@ export class LineBattleEngine {
     }
   }
 
+  public setSpeedMultiplier(mult: number): void {
+    this.speedMultiplier = validateSpeedMultiplier(mult);
+  }
+
+  public getSpeedMultiplier(): number {
+    return this.speedMultiplier;
+  }
+
   public start(): void {
     if (this.isDestroyed) {
       logger.warn('Cannot start a destroyed LineBattleEngine.');
@@ -79,6 +92,7 @@ export class LineBattleEngine {
     this.isRunning = true;
     this.isPaused = false;
     this.lastTime = performance.now();
+    this.virtualTime = performance.now();
     this.accumulator = 0;
     this.manager.start();
     this.rafId = requestAnimationFrame((ts) => this.tick(ts));
@@ -114,17 +128,37 @@ export class LineBattleEngine {
 
     try {
       if (!this.isPaused) {
-        this.accumulator += delta;
-        const maxAccumulator = this.config.fixedDeltaMs * this.config.maxSubSteps;
+        const isGameplay = this.manager.state === 'BATTLE';
+        const currentSpeed = isGameplay ? this.speedMultiplier : 1.0;
+
+        // When not in active gameplay (e.g. countdown or post-round screens), clamp any residual high-speed accumulator
+        if (!isGameplay && this.accumulator > this.config.fixedDeltaMs * 1.5) {
+          this.accumulator = this.config.fixedDeltaMs;
+        }
+
+        // Accumulate scaled delta time: speedMultiplier during active gameplay, 1.0x during countdown and post-round screens
+        this.accumulator += delta * currentSpeed;
+
+        // Scale maxSubSteps dynamically so high speeds run without artificial sub-step clamping
+        const scaledMaxSubSteps = Math.ceil(this.config.maxSubSteps * Math.max(1, currentSpeed) * 1.5);
+        const maxAccumulator = this.config.fixedDeltaMs * scaledMaxSubSteps;
         if (this.accumulator > maxAccumulator) {
           this.accumulator = maxAccumulator;
         }
 
         const pStart = performance.now();
         while (this.accumulator >= this.config.fixedDeltaMs) {
+          // Advance virtual simulation timestamp exactly synchronized with physics steps
+          this.virtualTime += this.config.fixedDeltaMs;
           Engine.update(this.physicsEngine, this.config.fixedDeltaMs);
-          this.manager.update(this.config.fixedDeltaMs, timestamp);
+          this.manager.update(this.config.fixedDeltaMs, this.virtualTime);
           this.accumulator -= this.config.fixedDeltaMs;
+
+          // Truncate residual high-speed sub-steps if battle state just transitioned
+          if (isGameplay && this.manager.state !== 'BATTLE') {
+            this.accumulator = 0;
+            break;
+          }
         }
         physicsDuration = performance.now() - pStart;
       }

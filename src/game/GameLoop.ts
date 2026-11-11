@@ -10,11 +10,13 @@ import type { Engine as MatterEngine } from 'matter-js';
 import type { PerformanceMonitor } from '../utils/performance.ts';
 import type { AdaptivePerformanceManager } from '../rendering/AdaptivePerformanceManager.ts';
 import { logger } from '../utils/logger.ts';
+import { validateSpeedMultiplier } from '../config/GameSpeed.ts';
 
 export interface GameLoopCallbacks {
   updatePhysics: (fixedDeltaMs: number) => void;
   updateLogic: (deltaMs: number, timestamp: number) => void;
   render: () => void;
+  isGameplayActive?: () => boolean;
 }
 
 export class GameLoop {
@@ -30,6 +32,8 @@ export class GameLoop {
   private isPaused = false;
   private lastTime = 0;
   private accumulator = 0;
+  private virtualTime = 0;
+  private speedMultiplier = 1.0;
   private isDestroyed = false;
 
   private visibilityHandler: () => void;
@@ -40,7 +44,8 @@ export class GameLoop {
     maxSubSteps: number,
     callbacks: GameLoopCallbacks,
     perfMonitor?: PerformanceMonitor,
-    adaptivePerf?: AdaptivePerformanceManager
+    adaptivePerf?: AdaptivePerformanceManager,
+    initialSpeedMultiplier: number = 1.0
   ) {
     this.engine = engine;
     this.fixedDeltaMs = fixedDeltaMs;
@@ -48,11 +53,20 @@ export class GameLoop {
     this.callbacks = callbacks;
     this.perfMonitor = perfMonitor;
     this.adaptivePerf = adaptivePerf;
+    this.speedMultiplier = validateSpeedMultiplier(initialSpeedMultiplier);
 
     this.visibilityHandler = () => this.handleVisibilityChange();
     if (typeof document !== 'undefined') {
       document.addEventListener('visibilitychange', this.visibilityHandler);
     }
+  }
+
+  public setSpeedMultiplier(mult: number): void {
+    this.speedMultiplier = validateSpeedMultiplier(mult);
+  }
+
+  public getSpeedMultiplier(): number {
+    return this.speedMultiplier;
   }
 
   public start(): void {
@@ -68,6 +82,7 @@ export class GameLoop {
     this.isRunning = true;
     this.isPaused = false;
     this.lastTime = performance.now();
+    this.virtualTime = performance.now();
     this.accumulator = 0;
     this.rafId = requestAnimationFrame((ts) => this.tick(ts));
     logger.info('GameLoop started.');
@@ -125,29 +140,49 @@ export class GameLoop {
 
     try {
       if (!this.isPaused) {
-        this.accumulator += delta;
+        const isGameplay = this.callbacks.isGameplayActive ? this.callbacks.isGameplayActive() : true;
+        const currentSpeed = isGameplay ? this.speedMultiplier : 1.0;
 
-        // Cap accumulator to prevent spiral of death
-        const maxAccumulator = this.fixedDeltaMs * this.maxSubSteps;
+        // When not in active gameplay (e.g. countdown or post-round screens), clamp any residual high-speed accumulator
+        if (!isGameplay && this.accumulator > this.fixedDeltaMs * 1.5) {
+          this.accumulator = this.fixedDeltaMs;
+        }
+
+        // Accumulate scaled delta time: speedMultiplier during active gameplay, 1.0x during countdown and post-round screens
+        this.accumulator += delta * currentSpeed;
+
+        // Scale maxSubSteps dynamically so high speeds run without artificial sub-step clamping
+        const scaledMaxSubSteps = Math.ceil(this.maxSubSteps * Math.max(1, currentSpeed) * 1.5);
+        const maxAccumulator = this.fixedDeltaMs * scaledMaxSubSteps;
         if (this.accumulator > maxAccumulator) {
           this.accumulator = maxAccumulator;
         }
 
         const pStart = performance.now();
         while (this.accumulator >= this.fixedDeltaMs) {
-          // Step physics engine
+          // Advance virtual simulation timestamp exactly synchronized with physics steps
+          this.virtualTime += this.fixedDeltaMs;
+
+          // Step physics engine at fixed 60Hz delta (zero tunneling / instability)
           Engine.update(this.engine, this.fixedDeltaMs);
           this.callbacks.updatePhysics(this.fixedDeltaMs);
+
+          // Step game logic and state timers using simulated time
+          this.callbacks.updateLogic(this.fixedDeltaMs, this.virtualTime);
+
           this.accumulator -= this.fixedDeltaMs;
           physicsSteps++;
+
+          // If round just finished and entered non-gameplay state, truncate any remaining high-speed sub-steps in this frame
+          if (isGameplay && this.callbacks.isGameplayActive && !this.callbacks.isGameplayActive()) {
+            this.accumulator = 0;
+            break;
+          }
         }
         physicsDuration = performance.now() - pStart;
-
-        // Update game logic (states, particles, timers)
-        this.callbacks.updateLogic(delta, timestamp);
       }
 
-      // Render step
+      // Render step (runs once per RAF frame for smooth 60fps display)
       const rStart = performance.now();
       this.callbacks.render();
       const renderDuration = performance.now() - rStart;

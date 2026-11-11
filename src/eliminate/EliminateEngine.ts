@@ -9,6 +9,7 @@ import { ELIMINATE_CONFIG } from './EliminateConfig.ts';
 import type { EliminateConfig } from './EliminateConfig.ts';
 import type { AdaptivePerformanceManager } from '../rendering/AdaptivePerformanceManager.ts';
 import { logger } from '../utils/logger.ts';
+import { validateSpeedMultiplier } from '../config/GameSpeed.ts';
 
 export class EliminateEngine {
   public manager: EliminateManager;
@@ -21,6 +22,8 @@ export class EliminateEngine {
   private isPaused: boolean = false;
   private lastTime: number = 0;
   private accumulator: number = 0;
+  private virtualTime: number = 0;
+  private speedMultiplier: number = 1.0;
   private isDestroyed: boolean = false;
 
   private visibilityHandler: () => void;
@@ -28,10 +31,12 @@ export class EliminateEngine {
   constructor(
     canvas: HTMLCanvasElement,
     customConfig?: Partial<EliminateConfig>,
-    adaptivePerf?: AdaptivePerformanceManager
+    adaptivePerf?: AdaptivePerformanceManager,
+    initialSpeedMultiplier: number = 1.0
   ) {
     this.config = { ...ELIMINATE_CONFIG, ...customConfig };
     this.adaptivePerf = adaptivePerf;
+    this.speedMultiplier = validateSpeedMultiplier(initialSpeedMultiplier);
     this.manager = new EliminateManager(this.config);
     this.renderer = new EliminateRenderer(
       canvas,
@@ -54,6 +59,14 @@ export class EliminateEngine {
     }
   }
 
+  public setSpeedMultiplier(mult: number): void {
+    this.speedMultiplier = validateSpeedMultiplier(mult);
+  }
+
+  public getSpeedMultiplier(): number {
+    return this.speedMultiplier;
+  }
+
   public start(): void {
     if (this.isDestroyed) {
       logger.warn('Cannot start a destroyed EliminateEngine.');
@@ -67,6 +80,7 @@ export class EliminateEngine {
     this.isRunning = true;
     this.isPaused = false;
     this.lastTime = performance.now();
+    this.virtualTime = performance.now();
     this.accumulator = 0;
     this.manager.start();
     this.rafId = requestAnimationFrame((ts) => this.tick(ts));
@@ -102,16 +116,36 @@ export class EliminateEngine {
 
     try {
       if (!this.isPaused) {
-        this.accumulator += delta;
-        const maxAccumulator = this.config.fixedDeltaMs * this.config.maxSubSteps;
+        const isGameplay = this.manager.state === 'BATTLE';
+        const currentSpeed = isGameplay ? this.speedMultiplier : 1.0;
+
+        // When not in active gameplay (e.g. countdown or post-round screens), clamp any residual high-speed accumulator
+        if (!isGameplay && this.accumulator > this.config.fixedDeltaMs * 1.5) {
+          this.accumulator = this.config.fixedDeltaMs;
+        }
+
+        // Accumulate scaled delta time: speedMultiplier during active gameplay, 1.0x during countdown and post-round screens
+        this.accumulator += delta * currentSpeed;
+
+        // Scale maxSubSteps dynamically so high speeds run without artificial sub-step clamping
+        const scaledMaxSubSteps = Math.ceil(this.config.maxSubSteps * Math.max(1, currentSpeed) * 1.5);
+        const maxAccumulator = this.config.fixedDeltaMs * scaledMaxSubSteps;
         if (this.accumulator > maxAccumulator) {
           this.accumulator = maxAccumulator;
         }
 
         const pStart = performance.now();
         while (this.accumulator >= this.config.fixedDeltaMs) {
-          this.manager.update(this.config.fixedDeltaMs, timestamp);
+          // Advance virtual simulation timestamp exactly synchronized with physics steps
+          this.virtualTime += this.config.fixedDeltaMs;
+          this.manager.update(this.config.fixedDeltaMs, this.virtualTime);
           this.accumulator -= this.config.fixedDeltaMs;
+
+          // Truncate residual high-speed sub-steps if battle state just transitioned
+          if (isGameplay && this.manager.state !== 'BATTLE') {
+            this.accumulator = 0;
+            break;
+          }
         }
         physicsDuration = performance.now() - pStart;
       }

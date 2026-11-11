@@ -101,7 +101,7 @@ export class LineBattleManager {
   private roundStartTime: number = 0;
   private lineIdCounter: number = 0;
   private collisionHandlerBound: (event: IEventCollision<Engine>) => void;
-  private currentTimestamp: number = 0;
+  public currentTimestamp: number = 0;
 
   public readonly config: LineBattleConfig;
   public readonly engine: Engine;

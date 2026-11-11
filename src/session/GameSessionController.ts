@@ -17,6 +17,7 @@ import type { BattleResults, EliminationEvent } from '../game/GameState.ts';
 import { AdaptivePerformanceManager } from '../rendering/AdaptivePerformanceManager.ts';
 import type { PerformanceDiagnosticsData } from '../rendering/AdaptivePerformanceManager.ts';
 import type { QualityMode, QualityProfile } from '../rendering/QualityProfiles.ts';
+import { DEFAULT_GAME_SPEED, validateSpeedMultiplier } from '../config/GameSpeed.ts';
 import { logger } from '../utils/logger.ts';
 
 export type GameType = 'battle' | 'eliminate' | 'line';
@@ -45,6 +46,7 @@ export interface SessionMetrics {
   recentResults: RoundHistoryEntry[];
   currentProfileName: string;
   qualityMode: QualityMode;
+  gameSpeed: number;
 }
 
 export class GameSessionController {
@@ -52,6 +54,7 @@ export class GameSessionController {
   public executionMode: ExecutionMode = 'INFINITE';
   public sessionState: SessionState = 'IDLE';
   public timedMinutes: number = 30;
+  public gameSpeed: number = DEFAULT_GAME_SPEED;
 
   public adaptivePerf: AdaptivePerformanceManager;
 
@@ -68,6 +71,8 @@ export class GameSessionController {
 
   // Session Timing
   private sessionStartTime: number = 0;
+  private lastSpeedUpdateTime: number = 0;
+  private simulatedElapsedMs: number = 0;
   private totalRoundsCompleted: number = 0;
   private winsByCountry = new Map<string, { country: CountryData; wins: number }>();
   public recentResults: RoundHistoryEntry[] = [];
@@ -115,6 +120,72 @@ export class GameSessionController {
     // Line Battle preferences
     const linePref = getSavedPreferences('line', defaultIds);
     this.selectedCountries.set('line', getCountriesByIds(linePref.selectedCountryIds));
+
+    // Load persisted simulation speed (default 1x)
+    if (typeof window !== 'undefined' && window.localStorage) {
+      try {
+        const savedSpeed = localStorage.getItem('cba_game_speed');
+        if (savedSpeed !== null) {
+          const parsed = parseFloat(savedSpeed);
+          if (!isNaN(parsed) && isFinite(parsed)) {
+            this.gameSpeed = validateSpeedMultiplier(parsed);
+          }
+        }
+      } catch {}
+    }
+  }
+
+  public setGameSpeed(speed: number): void {
+    const validated = validateSpeedMultiplier(speed);
+
+    // Accumulate simulated elapsed time up to this speed change point
+    if (this.sessionState === 'RUNNING' && this.lastSpeedUpdateTime > 0) {
+      const now = performance.now();
+      this.simulatedElapsedMs += Math.max(0, now - this.lastSpeedUpdateTime) * this.gameSpeed;
+      this.lastSpeedUpdateTime = now;
+    }
+
+    this.gameSpeed = validated;
+
+    if (typeof window !== 'undefined' && window.localStorage) {
+      try {
+        localStorage.setItem('cba_game_speed', validated.toString());
+      } catch {}
+    }
+
+    // Propagate dynamically to running engines
+    if (this.battleEngine) {
+      this.battleEngine.setSpeedMultiplier(validated);
+    }
+    if (this.eliminateEngine) {
+      this.eliminateEngine.setSpeedMultiplier(validated);
+    }
+    if (this.lineEngine) {
+      this.lineEngine.setSpeedMultiplier(validated);
+    }
+
+    this.onMetricsUpdate?.(this.getMetrics());
+    logger.info(`Game speed set to: ${validated}x`);
+  }
+
+  public getGameSpeed(): number {
+    return this.gameSpeed;
+  }
+
+  /**
+   * Calculates simulated session elapsed time in milliseconds,
+   * accounting for the speed multiplier and any dynamic speed switches.
+   */
+  public getSimulatedElapsedMs(): number {
+    if (this.sessionStartTime === 0) return 0;
+    const now = performance.now();
+    if (this.simulatedElapsedMs === 0) {
+      return Math.max(0, (now - this.sessionStartTime) * this.gameSpeed);
+    }
+    const recent = this.lastSpeedUpdateTime > 0
+      ? Math.max(0, now - this.lastSpeedUpdateTime) * this.gameSpeed
+      : 0;
+    return this.simulatedElapsedMs + recent;
   }
 
   public getSelectedCountries(gameType: GameType): CountryData[] {
@@ -164,6 +235,8 @@ export class GameSessionController {
 
     this.sessionState = 'RUNNING';
     this.sessionStartTime = performance.now();
+    this.lastSpeedUpdateTime = this.sessionStartTime;
+    this.simulatedElapsedMs = 0;
     this.finalSessionElapsedMs = 0;
     this.totalRoundsCompleted = 0;
     this.winsByCountry.clear();
@@ -204,7 +277,8 @@ export class GameSessionController {
           this.renderer.render(diag);
         }
       },
-      this.adaptivePerf
+      this.adaptivePerf,
+      this.gameSpeed
     );
 
     this.renderer = new Renderer(
@@ -242,7 +316,7 @@ export class GameSessionController {
   }
 
   private initEliminateEngine(participants: CountryData[], sessionId: number): void {
-    this.eliminateEngine = new EliminateEngine(this.canvas, undefined, this.adaptivePerf);
+    this.eliminateEngine = new EliminateEngine(this.canvas, undefined, this.adaptivePerf, this.gameSpeed);
     const em = this.eliminateEngine.manager;
     em.setParticipants(participants);
     em.autoLoop = this.executionMode !== 'ONCE';
@@ -271,7 +345,7 @@ export class GameSessionController {
   }
 
   private initLineBattleEngine(participants: CountryData[], sessionId: number): void {
-    this.lineEngine = new LineBattleEngine(this.canvas, undefined, this.adaptivePerf);
+    this.lineEngine = new LineBattleEngine(this.canvas, undefined, this.adaptivePerf, this.gameSpeed);
     const lm = this.lineEngine.manager;
     lm.setParticipants(participants);
     lm.autoLoop = this.executionMode !== 'ONCE';
@@ -324,7 +398,7 @@ export class GameSessionController {
 
     // Check execution mode termination rules
     if (this.executionMode === 'ONCE') {
-      this.finalSessionElapsedMs = Math.max(0, performance.now() - this.sessionStartTime);
+      this.finalSessionElapsedMs = this.getSimulatedElapsedMs();
       this.finishSession();
       if (this.battleEngine) this.battleEngine.battleManager.autoLoop = false;
       if (this.eliminateEngine) this.eliminateEngine.manager.autoLoop = false;
@@ -333,13 +407,13 @@ export class GameSessionController {
     }
 
     if (this.executionMode === 'TIMED') {
-      const elapsedMs = performance.now() - this.sessionStartTime;
+      const simulatedElapsedMs = this.getSimulatedElapsedMs();
       const targetDurationMs = this.timedMinutes * 60 * 1000;
 
-      if (elapsedMs >= targetDurationMs) {
+      if (simulatedElapsedMs >= targetDurationMs) {
         // Timed session expired: gracefully finish after presenting results
         logger.info(`Timed session (${this.timedMinutes}m) reached. Gracefully stopping after results presentation.`);
-        this.finalSessionElapsedMs = elapsedMs;
+        this.finalSessionElapsedMs = simulatedElapsedMs;
         this.finishSession();
         if (this.battleEngine) this.battleEngine.battleManager.autoLoop = false;
         if (this.eliminateEngine) this.eliminateEngine.manager.autoLoop = false;
@@ -364,7 +438,7 @@ export class GameSessionController {
   public finishSession(): void {
     this.sessionState = 'SESSION_FINISHED';
     if (this.finalSessionElapsedMs === 0 && this.sessionStartTime > 0) {
-      this.finalSessionElapsedMs = Math.max(0, performance.now() - this.sessionStartTime);
+      this.finalSessionElapsedMs = this.getSimulatedElapsedMs();
     }
     logger.info('Game session finished.');
   }
@@ -374,6 +448,8 @@ export class GameSessionController {
     this.stopActiveEngine();
     this.sessionState = 'IDLE';
     this.finalSessionElapsedMs = 0;
+    this.simulatedElapsedMs = 0;
+    this.lastSpeedUpdateTime = 0;
     this.onMetricsUpdate?.(this.getMetrics());
     logger.info('Game session stopped.');
   }
@@ -430,11 +506,10 @@ export class GameSessionController {
   }
 
   public getMetrics(): SessionMetrics {
-    const now = performance.now();
     const elapsedMs = this.sessionState === 'SESSION_FINISHED' && this.finalSessionElapsedMs > 0
       ? this.finalSessionElapsedMs
       : (this.sessionState === 'RUNNING' || this.sessionState === 'SESSION_FINISHED'
-          ? Math.max(0, now - this.sessionStartTime)
+          ? this.getSimulatedElapsedMs()
           : 0);
 
     let remainingMs: number | null = null;
@@ -467,6 +542,7 @@ export class GameSessionController {
       recentResults: [...this.recentResults],
       currentProfileName: this.adaptivePerf.currentProfile.name,
       qualityMode: this.adaptivePerf.qualityMode,
+      gameSpeed: this.gameSpeed,
     };
   }
 

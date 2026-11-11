@@ -123,7 +123,7 @@ export class EliminateRenderer {
     this.renderRotatingBoundary(ctx, profile);
 
     // 4. Particles (Under balls)
-    const now = performance.now();
+    const now = this.manager.currentTimestamp > 0 ? this.manager.currentTimestamp : performance.now();
     const scale = canvasWidth / 1280;
     const scaleFactor = scale;
 

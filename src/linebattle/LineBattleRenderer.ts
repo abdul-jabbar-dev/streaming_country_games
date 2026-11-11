@@ -52,7 +52,7 @@ export class LineBattleRenderer {
     const profile = this.currentProfile;
     const { canvasWidth, canvasHeight, arenaCenterX, arenaCenterY, arenaRadius } = profile;
     const scale = canvasWidth / 1280;
-    const now = performance.now();
+    const now = this.manager.currentTimestamp > 0 ? this.manager.currentTimestamp : performance.now();
 
     // 1. Clear Canvas Background
     ctx.fillStyle = '#060a12';
@@ -378,6 +378,7 @@ export class LineBattleRenderer {
   ): void {
     const balls = this.manager.balls;
     const effectiveRadius = Math.round(this.config.ballRadius * scale);
+    const now = this.manager.currentTimestamp > 0 ? this.manager.currentTimestamp : performance.now();
 
     for (let i = 0; i < balls.length; i++) {
       const ball = balls[i];
@@ -416,7 +417,7 @@ export class LineBattleRenderer {
       ctx.stroke();
 
       // Shield Active Bubble (glowing protective shield ring)
-      if (ball.isShieldActive(performance.now())) {
+      if (ball.isShieldActive(now)) {
         ctx.beginPath();
         ctx.arc(px, py, effectiveRadius + 5 * scale, 0, Math.PI * 2);
         ctx.fillStyle = 'rgba(6, 182, 212, 0.25)';
@@ -427,7 +428,7 @@ export class LineBattleRenderer {
       }
 
       // Speed Slicer Active Aura (electric blue high speed ring)
-      if (ball.isSpeedBoostActive(performance.now())) {
+      if (ball.isSpeedBoostActive(now)) {
         ctx.beginPath();
         ctx.arc(px, py, effectiveRadius + 7 * scale, 0, Math.PI * 2);
         ctx.strokeStyle = '#3b82f6';

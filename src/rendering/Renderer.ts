@@ -148,7 +148,7 @@ export class Renderer {
     const scale = canvasWidth / 1280;
 
     // 4. Collectibles (Abilities)
-    const now = performance.now();
+    const now = this.battleManager.currentTimestamp > 0 ? this.battleManager.currentTimestamp : performance.now();
     this.battleManager.collectibleManager.render(ctx, arenaCenterX, arenaCenterY, scale, now);
 
     // 4.5. Particles (Under balls)

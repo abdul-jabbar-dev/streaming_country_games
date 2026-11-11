@@ -23,7 +23,8 @@ export class GameEngine {
   constructor(
     config: GameConfig,
     renderCallback: () => void,
-    adaptivePerf?: AdaptivePerformanceManager
+    adaptivePerf?: AdaptivePerformanceManager,
+    initialSpeedMultiplier: number = 1.0
   ) {
     this.config = config;
     this.adaptivePerf = adaptivePerf;
@@ -47,10 +48,22 @@ export class GameEngine {
           this.battleManager.update(deltaMs, timestamp);
         },
         render: renderCallback,
+        isGameplayActive: () => {
+          return this.battleManager.state === 'BATTLE';
+        },
       },
       undefined,
-      adaptivePerf
+      adaptivePerf,
+      initialSpeedMultiplier
     );
+  }
+
+  public setSpeedMultiplier(mult: number): void {
+    this.gameLoop.setSpeedMultiplier(mult);
+  }
+
+  public getSpeedMultiplier(): number {
+    return this.gameLoop.getSpeedMultiplier();
   }
 
   public start(): void {

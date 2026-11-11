@@ -14,6 +14,7 @@ import { BroadcastMode } from './ui/BroadcastMode.ts';
 import { KeyboardShortcutManager } from './ui/KeyboardShortcutManager.ts';
 import { soundSynth } from './audio/SoundSynthesizer.ts';
 import { logger } from './utils/logger.ts';
+import { getSpeedPresetInfo } from './config/GameSpeed.ts';
 
 const app = document.querySelector<HTMLDivElement>('#app');
 if (!app) {
@@ -73,6 +74,11 @@ app.innerHTML = `
       <div class="dashboard-intro">
         <h2>SELECT A SURVIVAL ARENA</h2>
         <p>Choose an automated country survival simulation to launch</p>
+        <div class="dashboard-speed-hint">
+          <span>⚡ Simulation Speed:</span>
+          <strong id="dash-speed-val">1x (Normal)</strong>
+          <span class="dash-speed-tip">— Configurable in pre-game controller</span>
+        </div>
       </div>
 
       <div class="game-cards-grid">
@@ -164,6 +170,40 @@ app.innerHTML = `
         </div>
       </div>
 
+      <!-- Pre-Game Simulation Speed Controller Toolbar -->
+      <div class="session-speed-toolbar" id="session-speed-toolbar">
+        <div class="speed-toolbar-title-wrap">
+          <span>⚡ GAME SPEED:</span>
+          <div class="speed-badge-wrap">
+            <strong id="speed-display-val">1x</strong>
+            <span id="speed-desc-val" class="speed-desc">(Normal)</span>
+          </div>
+        </div>
+
+        <div class="speed-presets-group" id="speed-presets-group">
+          <button type="button" class="btn-speed-preset" data-speed="0.1" title="0.1x — Slow Motion">0.1x</button>
+          <button type="button" class="btn-speed-preset" data-speed="0.25" title="0.25x — Quarter Speed">0.25x</button>
+          <button type="button" class="btn-speed-preset" data-speed="0.5" title="0.5x — Half Speed">0.5x</button>
+          <button type="button" class="btn-speed-preset active" data-speed="1" title="1x — Normal">1x</button>
+          <button type="button" class="btn-speed-preset" data-speed="1.5" title="1.5x — Fast">1.5x</button>
+          <button type="button" class="btn-speed-preset" data-speed="2" title="2x — Very Fast">2x</button>
+          <button type="button" class="btn-speed-preset" data-speed="3" title="3x — Maximum Speed">3x</button>
+        </div>
+
+        <div class="speed-slider-wrap">
+          <input
+            type="range"
+            id="game-speed-slider"
+            class="speed-slider"
+            min="0.1"
+            max="3"
+            step="0.05"
+            value="1"
+            title="Adjust Simulation Speed Multiplier (0.1x to 3x)"
+          />
+        </div>
+      </div>
+
       <!-- Live Session Status Banner -->
       <div class="session-status-banner">
         <div class="banner-item">
@@ -177,6 +217,10 @@ app.innerHTML = `
         <div class="banner-item">
           <span class="banner-label" id="banner-time-label">ELAPSED TIME</span>
           <strong id="banner-time-val" class="banner-val highlight-gold">00:00</strong>
+        </div>
+        <div class="banner-item">
+          <span class="banner-label">SPEED</span>
+          <strong id="banner-speed-val" class="banner-val highlight-gold">1x (Normal)</strong>
         </div>
         <div class="banner-item">
           <span class="banner-label">ROUNDS COMPLETED</span>
@@ -197,7 +241,7 @@ app.innerHTML = `
         <!-- Arena Canvas Panel -->
         <div class="arena-panel">
           <div class="arena-heading">
-            <span class="arena-title" id="arena-panel-title">BATTLEGROUND</span>
+            <span class="arena-title" id="arena-panel-title">BATTLEGROUND</span> 
             <span id="game-status">IDLE</span>
           </div>
 
@@ -278,9 +322,66 @@ const bannerTimeVal = document.querySelector<HTMLElement>('#banner-time-val')!;
 const bannerRoundsVal = document.querySelector<HTMLElement>('#banner-rounds-val')!;
 const bannerProfileVal = document.querySelector<HTMLElement>('#banner-profile-val')!;
 const bannerStatusVal = document.querySelector<HTMLElement>('#banner-status-val')!;
+const bannerSpeedVal = document.querySelector<HTMLElement>('#banner-speed-val');
 const stopBtn = document.querySelector<HTMLButtonElement>('#session-stop-btn')!;
 const selectedCountryCount = document.querySelector<HTMLElement>('#selected-country-count')!;
 const qualitySelect = document.querySelector<HTMLSelectElement>('#quality-select')!;
+
+// Pre-Game Simulation Speed Elements
+const speedDisplayVal = document.querySelector<HTMLElement>('#speed-display-val');
+const speedDescVal = document.querySelector<HTMLElement>('#speed-desc-val');
+const gameSpeedSlider = document.querySelector<HTMLInputElement>('#game-speed-slider');
+const speedPresetBtns = document.querySelectorAll<HTMLButtonElement>('.btn-speed-preset');
+const arenaSpeedPill = document.querySelector<HTMLElement>('#arena-speed-pill');
+const dashSpeedVal = document.querySelector<HTMLElement>('#dash-speed-val');
+
+function updateSpeedUI(speed: number): void {
+  const info = getSpeedPresetInfo(speed);
+  const formattedSpeed = `${speed}x`;
+
+  if (speedDisplayVal) {
+    speedDisplayVal.textContent = formattedSpeed;
+  }
+  if (speedDescVal) {
+    speedDescVal.textContent = info ? `(${info.label})` : '';
+  }
+  if (gameSpeedSlider && parseFloat(gameSpeedSlider.value) !== speed) {
+    gameSpeedSlider.value = speed.toString();
+  }
+  speedPresetBtns.forEach((btn) => {
+    const btnSpeed = parseFloat(btn.dataset.speed || '1');
+    btn.classList.toggle('active', Math.abs(btnSpeed - speed) < 0.01);
+  });
+  if (bannerSpeedVal) {
+    bannerSpeedVal.textContent = `${formattedSpeed} ${info ? `(${info.label})` : ''}`;
+  }
+  if (arenaSpeedPill) {
+    arenaSpeedPill.textContent = `⚡ ${formattedSpeed} SPEED`;
+  }
+  if (dashSpeedVal) {
+    dashSpeedVal.textContent = formattedSpeed;
+  }
+  broadcastMode.updateSpeedBadge(speed);
+}
+
+function setGameSpeed(speed: number): void {
+  sessionController.setGameSpeed(speed);
+  updateSpeedUI(sessionController.getGameSpeed());
+}
+
+speedPresetBtns.forEach((btn) => {
+  btn.addEventListener('click', () => {
+    const speed = parseFloat(btn.dataset.speed || '1');
+    setGameSpeed(speed);
+  });
+});
+
+if (gameSpeedSlider) {
+  gameSpeedSlider.addEventListener('input', (e) => {
+    const val = parseFloat((e.target as HTMLInputElement).value);
+    setGameSpeed(val);
+  });
+}
 
 // Navigation & Screen Switching
 function showDashboard(): void {
@@ -290,6 +391,7 @@ function showDashboard(): void {
   appSubheading.textContent = 'Multi-Game Management System • Select a Game Mode';
   globalLiveText.textContent = 'STANDBY';
   updateCardBadges();
+  updateSpeedUI(sessionController.getGameSpeed());
 }
 
 function showGame(gameType: GameType): void {
@@ -512,6 +614,7 @@ sessionController.onProfileChanged = (profile) => {
 function updateSessionUI(): void {
   const metrics = sessionController.getMetrics();
   hud.updateSessionStats(metrics.winsByCountry, metrics.recentResults);
+  updateSpeedUI(metrics.gameSpeed);
 
   bannerModeName.textContent = metrics.mode === 'TIMED' ? `TIMED (${sessionController.timedMinutes}M)` : metrics.mode;
   bannerRoundsVal.textContent = metrics.totalRoundsCompleted.toString();
@@ -595,6 +698,9 @@ const shortcutManager = new KeyboardShortcutManager({
   switchGameMode: (mode) => {
     showGame(mode);
   },
+  setGameSpeed: (speed) => {
+    setGameSpeed(speed);
+  },
   startSession: (mode, minutes) => {
     if (mode === 'ONCE') {
       highlightModeBtn(modeOnceBtn);
@@ -653,6 +759,9 @@ window.addEventListener('keydown', (e) => {
     debugBtn?.classList.toggle('active', CONFIG.debugMode);
   }
 });
+
+// Initialize Speed Controller UI with active / restored speed
+updateSpeedUI(sessionController.getGameSpeed());
 
 // Initial View: Start at Dashboard or launch via URL parameter
 const urlParams = new URLSearchParams(window.location.search);
